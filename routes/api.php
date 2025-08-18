@@ -61,3 +61,19 @@ Route::get('companies/{id}/trips', [TripController::class, 'publicIndex']);
 
 
 
+use App\Http\Controllers\DriverController;
+
+// Get all drivers
+Route::get('/drivers', [DriverController::class, 'getAllDrivers']);
+
+// Get single driver
+Route::get('/drivers/{id}', [DriverController::class, 'getDriver']);
+
+// Create a new driver
+Route::post('/drivers', [DriverController::class, 'createDriver']);
+
+// Update a driver
+Route::put('/drivers/{id}', [DriverController::class, 'updateDriver']);
+
+// Delete a driver
+Route::delete('/drivers/{id}', [DriverController::class, 'deleteDriver']);

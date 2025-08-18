@@ -33,4 +33,6 @@ class Trip extends Model
         return $this->belongsTo(Bus::class);
     }
     */
+    
+
 }
