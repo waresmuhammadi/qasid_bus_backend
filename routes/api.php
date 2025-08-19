@@ -44,18 +44,23 @@ Route::middleware('company.auth')->group(function () {
     Route::post('/trips', [TripController::class, 'store']);
     Route::put('/trips/{id}', [TripController::class, 'update']);
     Route::delete('/trips/{id}', [TripController::class, 'destroy']);
-     Route::get('/trips', [TripController::class, 'index']);
+
+     Route::post('/trips/{tripId}/reserve', [TripController::class, 'reserve']);
+Route::get('/trips/{tripId}/availability', [TripController::class, 'availability']);
 
 
 });
+     Route::get('/trips', [TripController::class, 'index']);
+     Route::get('/public/trips', [TripController::class, 'publicIndex']);
+
 
 Route::get('/buses', [BusController::class, 'index']);
+
 Route::get('/buses/{id}', [BusController::class, 'show']);
 
 
 
     Route::get('/trips/{id}', [TripController::class, 'show']);
-
     // routes/api.php
 Route::get('companies/{id}/trips', [TripController::class, 'publicIndex']);
 
@@ -77,3 +82,8 @@ Route::put('/drivers/{id}', [DriverController::class, 'updateDriver']);
 
 // Delete a driver
 Route::delete('/drivers/{id}', [DriverController::class, 'deleteDriver']);
+
+use App\Http\Controllers\TicketController;
+
+Route::get('/trips/{tripId}/seats', [TicketController::class, 'availableSeats']);
+Route::post('/trips/{tripId}/book', [TicketController::class, 'book']);
