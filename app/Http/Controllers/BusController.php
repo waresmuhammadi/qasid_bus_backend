@@ -26,7 +26,7 @@ public function store(Request $request)
         'model'         => 'required|string',
     ]);
 
-    $company = $request->get('company'); // ✅ from middleware
+    $company = $request->get('company'); 
 
     $bus = Bus::create([
         'bus_no'        => $request->bus_no,

@@ -10,7 +10,7 @@ return new class extends Migration {
         Schema::create('drivers', function (Blueprint $table) {
             $table->id();
             $table->string('name');
-              $table->string('father/name');
+              $table->string('fathe');
             $table->string('phone')->nullable();
             $table->string('license_number')->nullable();
             $table->timestamps();
