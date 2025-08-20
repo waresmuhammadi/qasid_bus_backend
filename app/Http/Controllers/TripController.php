@@ -101,18 +101,15 @@ class TripController extends Controller
     }
 
 
-    public function publicIndex(Request $request)
-{
-    $companyId = $request->query('company_id'); // e.g. ?company_id=1
+ public function publicIndex(Request $request)
+    {
+        $companyId = $request->query('company_id'); // e.g. ?company_id=1
+        $trips = $companyId 
+            ? Trip::where('company_id', $companyId)->get() 
+            : Trip::all();
 
-    $trips = Trip::with('company:id,name') // only fetch id + name from company
-        ->when($companyId, function ($query) use ($companyId) {
-            $query->where('company_id', $companyId);
-        })
-        ->get();
-
-    return response()->json($trips);
-}
+        return response()->json($trips);
+    }
 
 
 }
