@@ -31,7 +31,7 @@ class DriverController extends Controller
     {
         $request->validate([
             'name' => 'required|string',
-            'father/name' => 'required|string',
+            'father_name' => 'required|string', // ✅ corrected
             'phone' => 'nullable|string',
             'license_number' => 'required|string|unique:drivers,license_number',
         ]);
@@ -51,7 +51,7 @@ class DriverController extends Controller
 
         $request->validate([
             'name' => 'required|string',
-            'father/name' => 'required|string',
+            'father_name' => 'required|string', // ✅ corrected
             'phone' => 'nullable|string',
             'license_number' => 'required|string|unique:drivers,license_number,' . $driver->id,
         ]);

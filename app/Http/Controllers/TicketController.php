@@ -76,4 +76,35 @@ class TicketController extends Controller
     ], 201);
 }
 
+ public function tripTickets($tripId)
+    {
+        $trip = Trip::find($tripId);
+
+        if (!$trip) {
+            return response()->json(['message' => 'Trip not found'], 404);
+        }
+
+        $tickets = Ticket::where('trip_id', $tripId)->get();
+
+        return response()->json([
+            'trip' => $trip,
+            'tickets' => $tickets
+        ]);
+    }
+
+    // ✅ Get all trips with their tickets
+    public function allTripsWithTickets()
+    {
+        $trips = Trip::with('tickets')->get(); // eager load tickets
+
+        return response()->json([
+            'trips' => $trips
+        ]);
+    }
+
+
+
+
+
+
 }

@@ -14,8 +14,8 @@ class BusController extends Controller
         return response()->json($buses);
     }
 
-    // Store a new bus (no authentication required)
-  // Store a new bus (only for authorized company)
+    
+  
 public function store(Request $request)
 {
     $request->validate([

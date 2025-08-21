@@ -86,4 +86,8 @@ Route::delete('/drivers/{id}', [DriverController::class, 'deleteDriver']);
 use App\Http\Controllers\TicketController;
 
 Route::get('/trips/{tripId}/seats', [TicketController::class, 'availableSeats']);
+
 Route::post('/trips/{tripId}/book', [TicketController::class, 'book']);
+
+Route::get('/trips/{tripId}/tickets', [TicketController::class, 'tripTickets']);
+Route::get('/trips-with-tickets', [TicketController::class, 'allTripsWithTickets']);
