@@ -18,7 +18,7 @@ class TicketController extends Controller
         }
 
         // Example: assume each bus has 40 seats
-        $totalSeats = 40;
+        $totalSeats =35;
         $bookedSeats = Ticket::where('trip_id', $tripId)->pluck('seat_number')->toArray();
 
         $availableSeats = [];
@@ -36,14 +36,14 @@ class TicketController extends Controller
     }
 
     // Book a ticket
-   public function book(Request $request, $tripId)
+public function book(Request $request, $tripId)
 {
     $request->validate([
         'seat_number' => 'required|integer',
         'name' => 'required|string|max:255',
         'last_name' => 'required|string|max:255',
         'phone' => 'required|string|max:20',
-        'payment_method' => 'required|in:hessappay,doorpay', // ✅ validate two methods
+        'payment_method' => 'required|in:hessappay,doorpay',
     ]);
 
     $trip = Trip::find($tripId);
@@ -61,6 +61,7 @@ class TicketController extends Controller
         return response()->json(['message' => 'Seat already booked'], 400);
     }
 
+    // ✅ status will be set to 'stopped' automatically (DB default)
     $ticket = Ticket::create([
         'trip_id' => $tripId,
         'seat_number' => $request->seat_number,
@@ -75,6 +76,7 @@ class TicketController extends Controller
         'ticket' => $ticket
     ], 201);
 }
+
 
  public function tripTickets($tripId)
     {

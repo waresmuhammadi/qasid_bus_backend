@@ -16,6 +16,7 @@ class Ticket extends Model
     'last_name',   // ✅ new field
     'phone',
     'payment_method', // ✅ new field
+      'status',
 ];
     public function trip()
     {
