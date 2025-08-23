@@ -22,4 +22,21 @@ class Ticket extends Model
     {
         return $this->belongsTo(Trip::class);
     }
+
+
+    public function bus()
+{
+    return $this->belongsTo(Bus::class);
+}
+
+public function driver()
+{
+    return $this->belongsTo(Driver::class);
+}
+
+
+
+
+
+
 }

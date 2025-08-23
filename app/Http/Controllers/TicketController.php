@@ -105,6 +105,59 @@ public function book(Request $request, $tripId)
     }
 
 
+    public function assignBusAndDriver(Request $request, $ticketId)
+{
+    $request->validate([
+        'bus_id' => 'required|exists:buses,id',
+        'driver_id' => 'required|exists:drivers,id',
+    ]);
+
+    $ticket = Ticket::find($ticketId);
+
+    if (!$ticket) {
+        return response()->json(['message' => 'Ticket not found'], 404);
+    }
+
+    $ticket->bus_id = $request->bus_id;
+    $ticket->driver_id = $request->driver_id;
+    $ticket->save();
+
+    return response()->json([
+        'message' => 'Bus and driver assigned successfully to ticket!',
+        'ticket' => $ticket->load(['bus', 'driver'])
+    ]);
+
+
+ 
+
+
+
+}
+
+
+public function bulkAssignBusAndDriver(Request $request)
+{
+    $request->validate([
+        'ticket_ids' => 'required|array',
+        'ticket_ids.*' => 'exists:tickets,id',
+        'bus_id' => 'required|exists:buses,id',
+        'driver_id' => 'required|exists:drivers,id',
+    ]);
+
+    Ticket::whereIn('id', $request->ticket_ids)
+        ->update([
+            'bus_id' => $request->bus_id,
+            'driver_id' => $request->driver_id,
+        ]);
+
+    return response()->json([
+        'message' => 'Bus and driver assigned to selected tickets successfully!',
+    ]);
+}
+
+
+
+
 
 
 

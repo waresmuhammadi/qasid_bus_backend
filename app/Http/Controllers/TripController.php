@@ -14,23 +14,46 @@ class TripController extends Controller
         9 => 'قوس', 10 => 'جدی', 11 => 'دلو', 12 => 'حوت',
     ];
 
-    // Format trip for response (Afghan date + AM/PM)
     private function formatTrip($trip)
     {
-        // departure_date is already Jalali in DB
         $parts = explode('-', $trip->departure_date);
         $year = (int)$parts[0];
         $month = (int)$parts[1];
         $day = (int)$parts[2];
-
         $monthName = $this->afghanMonths[$month] ?? '';
         $trip->departure_date_dari = "$day $monthName $year";
         $trip->departure_time_ampm = date("h:i A", strtotime($trip->departure_time));
-
         return $trip;
     }
 
-    // Store a new trip (Jalali date)
+    // Public trips with filtering
+    public function publicIndex(Request $request)
+    {
+        $query = Trip::query();
+        
+        if ($request->has('company_id')) {
+            $query->where('company_id', $request->query('company_id'));
+        }
+        
+        if ($request->has('from')) {
+            $query->where('from', 'like', '%' . $request->query('from') . '%');
+        }
+        
+        if ($request->has('to')) {
+            $query->where('to', 'like', '%' . $request->query('to') . '%');
+        }
+        
+        if ($request->has('date')) {
+            $query->where('departure_date', $request->query('date'));
+        }
+        
+        $trips = $query->get();
+        $trips->transform(fn($trip) => $this->formatTrip($trip));
+
+        return response()->json($trips);
+    }
+
+    // Store a new trip
     public function store(Request $request)
     {
         $request->validate([
@@ -42,10 +65,10 @@ class TripController extends Controller
             'departure_date_jalali.day' => 'required|integer',
             'departure_terminal' => 'required|string|max:255',
             'arrival_terminal' => 'required|string|max:255',
+            'price' => 'required|numeric|min:0', // ✅ Price required
         ]);
 
         $company = $request->get('company');
-
         $jalali = $request->departure_date_jalali;
         $departureDate = sprintf("%04d-%02d-%02d", $jalali['year'], $jalali['month'], $jalali['day']);
 
@@ -54,9 +77,10 @@ class TripController extends Controller
             'from' => $request->from,
             'to' => $request->to,
             'departure_time' => $request->departure_time,
-            'departure_date' => $departureDate, // store Jalali directly
+            'departure_date' => $departureDate,
             'departure_terminal' => $request->departure_terminal,
             'arrival_terminal' => $request->arrival_terminal,
+            'price' => $request->price, // ✅ Save price
         ]);
 
         $trip = $this->formatTrip($trip);
@@ -86,6 +110,7 @@ class TripController extends Controller
             'departure_date_jalali.day' => 'sometimes|required|integer',
             'departure_terminal' => 'sometimes|required|string|max:255',
             'arrival_terminal' => 'sometimes|required|string|max:255',
+            'price' => 'sometimes|required|numeric|min:0', // ✅ Price allowed in update
         ]);
 
         $data = $request->all();
@@ -110,19 +135,6 @@ class TripController extends Controller
     {
         $company = $request->get('company');
         $trips = Trip::where('company_id', $company['id'])->get();
-
-        $trips->transform(fn($trip) => $this->formatTrip($trip));
-
-        return response()->json($trips);
-    }
-
-    // Public trips
-    public function publicIndex(Request $request)
-    {
-        $companyId = $request->query('company_id');
-        $trips = $companyId 
-            ? Trip::where('company_id', $companyId)->get()
-            : Trip::all();
 
         $trips->transform(fn($trip) => $this->formatTrip($trip));
 
