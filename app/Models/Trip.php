@@ -17,6 +17,7 @@ class Trip extends Model
         'departure_date',
         'departure_terminal',
         'arrival_terminal',
+        'price',
     ];
 
     // ✅ Add this relationship

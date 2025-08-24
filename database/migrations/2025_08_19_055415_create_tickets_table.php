@@ -16,7 +16,6 @@ return new class extends Migration {
         $table->string('email');
         $table->string('phone');
         $table->timestamps();
-
         $table->foreign('trip_id')->references('id')->on('trips')->onDelete('cascade');
     });
 }
