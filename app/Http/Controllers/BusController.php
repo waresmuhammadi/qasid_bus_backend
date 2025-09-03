@@ -14,35 +14,31 @@ class BusController extends Controller
         return response()->json($buses);
     }
 
-    
-  
-public function store(Request $request)
-{
-    $request->validate([
-        'bus_no'        => 'required|string|unique:buses',
-        'number_plate'  => 'required|string|unique:buses',
-        'license_number'=> 'required|string|unique:buses',
-        'type'          => 'required|in:standard,vip',
-        'model'         => 'required|string',
-    ]);
+    // Create a new bus
+    public function store(Request $request)
+    {
+        $request->validate([
+            'bus_no'        => 'required|string|unique:buses',
+            'number_plate'  => 'required|string|unique:buses',
+            'license_number'=> 'required|string|unique:buses',
+            'type'          => 'required|in:vip,580', // ✅ updated
+        ]);
 
-    $company = $request->get('company'); 
+        $company = $request->get('company'); 
 
-    $bus = Bus::create([
-        'bus_no'        => $request->bus_no,
-        'number_plate'  => $request->number_plate,
-        'license_number'=> $request->license_number,
-        'type'          => $request->type,
-        'model'         => $request->model,
-        'company_id'    => $company['id'], // ✅ link to the logged-in company
-    ]);
+        $bus = Bus::create([
+            'bus_no'        => $request->bus_no,
+            'number_plate'  => $request->number_plate,
+            'license_number'=> $request->license_number,
+            'type'          => $request->type,
+            'company_id'    => $company['id'], // link to logged-in company
+        ]);
 
-    return response()->json([
-        'message' => 'Bus created successfully',
-        'bus'     => $bus,
-    ], 201);
-}
-
+        return response()->json([
+            'message' => 'Bus created successfully',
+            'bus'     => $bus,
+        ], 201);
+    }
 
     // Get a single bus
     public function show($id)
@@ -66,11 +62,10 @@ public function store(Request $request)
             'bus_no'        => 'sometimes|required|string|unique:buses,bus_no,' . $bus->id,
             'number_plate'  => 'sometimes|required|string|unique:buses,number_plate,' . $bus->id,
             'license_number'=> 'sometimes|required|string|unique:buses,license_number,' . $bus->id,
-            'type'          => 'sometimes|required|in:standard,vip',
-            'model'         => 'sometimes|required|string',
+            'type'          => 'sometimes|required|in:vip,580', // ✅ updated
         ]);
 
-        $bus->update($request->all());
+        $bus->update($request->only(['bus_no', 'number_plate', 'license_number', 'type']));
 
         return response()->json([
             'message' => 'Bus updated successfully',

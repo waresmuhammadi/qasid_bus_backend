@@ -104,7 +104,7 @@ class TripController extends Controller
         $request->validate([
             'from' => 'sometimes|required|string|max:255',
             'to' => 'sometimes|required|string|max:255',
-            'departure_time' => 'sometimes|required|date_format:H:i',
+           
             'departure_date_jalali.year' => 'sometimes|required|integer',
             'departure_date_jalali.month' => 'sometimes|required|integer',
             'departure_date_jalali.day' => 'sometimes|required|integer',
