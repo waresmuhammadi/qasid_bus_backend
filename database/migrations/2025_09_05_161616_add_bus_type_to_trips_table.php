@@ -9,15 +9,15 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('trips', function (Blueprint $table) {
-            // Add price column after arrival_terminal
-            $table->decimal('price', 10, 2)->after('arrival_terminal')->default(0);
+            // Add bus_type as JSON and NOT NULL
+            $table->json('bus_type')->after('company_id')->nullable(false);
         });
     }
 
     public function down(): void
     {
         Schema::table('trips', function (Blueprint $table) {
-            $table->dropColumn('price');
+            $table->dropColumn('bus_type');
         });
     }
 };

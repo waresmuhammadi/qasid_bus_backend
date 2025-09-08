@@ -11,7 +11,9 @@ class Ticket extends Model
 
    protected $fillable = [
     'trip_id',
-    'seat_number',
+    'seat_numbers',
+      'seat_number',
+    'bus_type',
     'name',
     'last_name',   // ✅ new field
     'phone',
@@ -34,6 +36,11 @@ public function driver()
     return $this->belongsTo(Driver::class);
 }
 
+
+
+ protected $casts = [
+    'seat_numbers' => 'array',
+];
 
 
 

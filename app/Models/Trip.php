@@ -17,14 +17,57 @@ class Trip extends Model
         'departure_date',
         'departure_terminal',
         'arrival_terminal',
-        'price',
+        'prices' ,
+        'bus_type'
     ];
+    
+    protected $casts = [
+    'bus_type' => 'array',  // ✅ ensures PHP array <-> JSON storage
+      'prices' => 'array',
+     
 
+
+];
     // ✅ Add this relationship
     public function tickets()
     {
         return $this->hasMany(Ticket::class);
     }
+
+
+
+    // Add this method to get seat capacity based on bus type
+// In your Trip model (App\Models\Trip.php)
+public function getSeatCapacity()
+{
+    $capacity = 0;
+    if (is_array($this->bus_type)) {
+        foreach ($this->bus_type as $type) {
+            if ($type === 'VIP') {
+                $capacity += 36; // VIP bus has 36 seats
+            } elseif ($type === '580') {
+                $capacity += 51; // 580 bus has 51 seats
+            }
+        }
+    }
+    return $capacity;
+}
+
+// Add this method to get available seats
+public function getAvailableSeats()
+{
+    $bookedSeats = $this->tickets()->pluck('seat_number')->toArray();
+    $capacity = $this->getSeatCapacity();
+    
+    $availableSeats = [];
+    for ($i = 1; $i <= $capacity; $i++) {
+        if (!in_array($i, $bookedSeats)) {
+            $availableSeats[] = $i;
+        }
+    }
+    
+    return $availableSeats;
+}
 
 
     

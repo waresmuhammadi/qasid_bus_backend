@@ -97,3 +97,6 @@ Route::get('/trips-with-tickets', [TicketController::class, 'allTripsWithTickets
 
     // ✅ Assign bus & driver to multiple tickets at once
     Route::put('assign-bulk', [TicketController::class, 'bulkAssignBusAndDriver']);
+
+
+    Route::post('/tickets/{ticketId}/mark-paid', [TicketController::class, 'markAsPaid']);

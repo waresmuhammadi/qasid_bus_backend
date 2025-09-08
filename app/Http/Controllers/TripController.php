@@ -23,6 +23,14 @@ class TripController extends Controller
         $monthName = $this->afghanMonths[$month] ?? '';
         $trip->departure_date_dari = "$day $monthName $year";
         $trip->departure_time_ampm = date("h:i A", strtotime($trip->departure_time));
+        
+        // Format bus type and price for display
+        if (is_array($trip->bus_type)) {
+            $trip->formatted_bus_type = implode(', ', $trip->bus_type);
+        } else {
+            $trip->formatted_bus_type = $trip->bus_type;
+        }
+        
         return $trip;
     }
 
@@ -47,6 +55,11 @@ class TripController extends Controller
             $query->where('departure_date', $request->query('date'));
         }
         
+        if ($request->has('bus_type')) {
+            $busType = $request->query('bus_type');
+            $query->whereJsonContains('bus_type', $busType);
+        }
+        
         $trips = $query->get();
         $trips->transform(fn($trip) => $this->formatTrip($trip));
 
@@ -65,12 +78,24 @@ class TripController extends Controller
             'departure_date_jalali.day' => 'required|integer',
             'departure_terminal' => 'required|string|max:255',
             'arrival_terminal' => 'required|string|max:255',
-            'price' => 'required|numeric|min:0', // ✅ Price required
+            'bus_type' => 'required|array',
+            'bus_type.*' => 'in:VIP,580',
+            'price_vip' => 'required_if:bus_type,VIP|numeric|min:0',
+            'price_580' => 'required_if:bus_type,580|numeric|min:0',
         ]);
 
         $company = $request->get('company');
         $jalali = $request->departure_date_jalali;
         $departureDate = sprintf("%04d-%02d-%02d", $jalali['year'], $jalali['month'], $jalali['day']);
+
+        // Create price array based on bus types
+        $prices = [];
+        if (in_array('VIP', $request->bus_type)) {
+            $prices['VIP'] = $request->price_vip;
+        }
+        if (in_array('580', $request->bus_type)) {
+            $prices['580'] = $request->price_580;
+        }
 
         $trip = Trip::create([
             'company_id' => $company['id'],
@@ -80,7 +105,8 @@ class TripController extends Controller
             'departure_date' => $departureDate,
             'departure_terminal' => $request->departure_terminal,
             'arrival_terminal' => $request->arrival_terminal,
-            'price' => $request->price, // ✅ Save price
+            'bus_type' => $request->bus_type,
+            'prices' => $prices, // Store prices as JSON
         ]);
 
         $trip = $this->formatTrip($trip);
@@ -101,27 +127,50 @@ class TripController extends Controller
             return response()->json(['message' => 'Trip not found'], 404);
         }
 
+        // Validate request
         $request->validate([
             'from' => 'sometimes|required|string|max:255',
             'to' => 'sometimes|required|string|max:255',
-           
             'departure_date_jalali.year' => 'sometimes|required|integer',
             'departure_date_jalali.month' => 'sometimes|required|integer',
             'departure_date_jalali.day' => 'sometimes|required|integer',
             'departure_terminal' => 'sometimes|required|string|max:255',
             'arrival_terminal' => 'sometimes|required|string|max:255',
-            'price' => 'sometimes|required|numeric|min:0', // ✅ Price allowed in update
+            'bus_type' => 'sometimes|required|array',
+            'bus_type.*' => 'in:VIP,580',
+            'price_vip' => 'required_if:bus_type,VIP|numeric|min:0',
+            'price_580' => 'required_if:bus_type,580|numeric|min:0',
         ]);
 
         $data = $request->all();
 
+        // Convert Jalali to standard date if present
         if ($request->has('departure_date_jalali')) {
             $jalali = $request->departure_date_jalali;
-            $data['departure_date'] = sprintf("%04d-%02d-%02d", $jalali['year'], $jalali['month'], $jalali['day']);
+            $data['departure_date'] = sprintf(
+                "%04d-%02d-%02d",
+                $jalali['year'],
+                $jalali['month'],
+                $jalali['day']
+            );
         }
 
+        // Update prices if bus_type is being updated
+        if ($request->has('bus_type')) {
+            $prices = [];
+            if (in_array('VIP', $request->bus_type)) {
+                $prices['VIP'] = $request->price_vip;
+            }
+            if (in_array('580', $request->bus_type)) {
+                $prices['580'] = $request->price_580;
+            }
+            $data['prices'] = $prices;
+        }
+
+        // Update the trip
         $trip->update($data);
 
+        // Optional: format trip for frontend
         $trip = $this->formatTrip($trip);
 
         return response()->json([
