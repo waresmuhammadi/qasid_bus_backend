@@ -100,3 +100,20 @@ Route::get('/trips-with-tickets', [TicketController::class, 'allTripsWithTickets
 
 
     Route::post('/tickets/{ticketId}/mark-paid', [TicketController::class, 'markAsPaid']);
+
+    // routes/api.php
+use App\Http\Controllers\RatingController;
+
+Route::get('ratings', [RatingController::class, 'getAll']);
+Route::post('ratings', [RatingController::class, 'create']);
+Route::put('ratings/{id}', [RatingController::class, 'update']);
+Route::delete('ratings/{id}', [RatingController::class, 'delete']);
+
+
+
+Route::post('/trips/{trip}/rate', [RatingController::class, 'store']);
+Route::get('/trips/{trip}/ratings-summary', [RatingController::class, 'summary']);
+Route::get('/trips/{trip}/ratings-count', [RatingController::class, 'count']);
+
+Route::get('/trips/{trip}/ratings-breakdown', [RatingController::class, 'breakdown']);
+Route::get('/trips/{trip}/ratings-total', [RatingController::class, 'totalScore']);

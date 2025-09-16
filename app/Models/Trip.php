@@ -18,12 +18,14 @@ class Trip extends Model
         'departure_terminal',
         'arrival_terminal',
         'prices' ,
-        'bus_type'
+        'bus_type',
+         'all_days',
     ];
     
     protected $casts = [
     'bus_type' => 'array',  // ✅ ensures PHP array <-> JSON storage
       'prices' => 'array',
+      'ratings' => 'array',
      
 
 
@@ -69,6 +71,21 @@ public function getAvailableSeats()
     return $availableSeats;
 }
 
+
+public function ratings()
+{
+    return $this->hasMany(Rating::class);
+}
+
+public function averageRating()
+{
+    return $this->ratings()->avg('rate');
+}
+
+public function ratingsCount()
+{
+    return $this->ratings()->count();
+}
 
     
 }
