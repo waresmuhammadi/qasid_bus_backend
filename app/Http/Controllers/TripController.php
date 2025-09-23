@@ -40,9 +40,7 @@ class TripController extends Controller
     return $trip;
 }
 
-
-    // Public trips with filtering
-  public function publicIndex(Request $request)
+public function publicIndex(Request $request)
 {
     $query = Trip::query();
     
@@ -61,8 +59,8 @@ class TripController extends Controller
     if ($request->has('date')) {
         $date = $request->query('date');
         $query->where(function($q) use ($date) {
-            $q->where('departure_date', $date)
-              ->orWhere('all_days', true); // match trips that are available every day
+            $q->where('departure_date', $date) // Specific date trips
+              ->orWhere('all_days', true); // All days trips
         });
     }
 
@@ -76,7 +74,6 @@ class TripController extends Controller
 
     return response()->json($trips);
 }
-
     // Store a new trip
   public function store(Request $request)
 {

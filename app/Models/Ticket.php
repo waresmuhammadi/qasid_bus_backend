@@ -19,6 +19,7 @@ class Ticket extends Model
     'phone',
     'payment_method', // ✅ new field
       'status',
+       'departure_date',
 ];
     public function trip()
     {
@@ -41,8 +42,6 @@ public function driver()
  protected $casts = [
     'seat_numbers' => 'array',
 ];
-
-
 
 
 

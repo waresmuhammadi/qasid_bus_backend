@@ -9,7 +9,7 @@ use App\Models\Ticket;
 class TicketController extends Controller
 {
     // Show available seats for a specific bus type in a trip
-   public function availableSeats(Request $request, $tripId)
+    public function availableSeats(Request $request, $tripId)
 {
     $request->validate([
         'bus_type' => 'required|in:VIP,580',
@@ -58,8 +58,6 @@ class TicketController extends Controller
         'total_capacity'    => $capacity,
     ]);
 }
-
-
     // Helper method to get seat range for a specific bus type
    private function getSeatRangeForBusType($tripBusTypes, $selectedBusType)
 {
@@ -68,9 +66,7 @@ class TicketController extends Controller
     return ['start' => 1, 'end' => $capacity];
 }
 
-    // Book multiple seats for ONE user in a specific bus type
-   // Book multiple seats for ONE user in a specific bus type
-public function book(Request $request, $tripId)
+  public function book(Request $request, $tripId)
 {
     $request->validate([
         'seat_numbers'   => 'required|array',
@@ -80,6 +76,7 @@ public function book(Request $request, $tripId)
         'phone'          => 'required|string|max:20',
         'payment_method' => 'required|in:hessabpay,doorpay',
         'bus_type'       => 'required|in:VIP,580',
+        'departure_date' => 'sometimes'
     ]);
 
     $trip = Trip::find($tripId);
@@ -87,8 +84,31 @@ public function book(Request $request, $tripId)
         return response()->json(['message' => 'Trip not found'], 404);
     }
 
-    // Check for already booked seats
+    $departureDate = null;
+
+    if ($trip->all_days) {
+        // ✅ Daily trips → require user-provided date
+        if (!$request->has('departure_date')) {
+            return response()->json([
+                'message' => 'Departure date is required for daily available trips'
+            ], 400);
+        }
+        $departureDate = $request->departure_date;
+    } else {
+        // ✅ Fixed-date trips
+        $departureDate = $trip->departure_date;
+
+        // If user provided a departure_date and it does not match → error
+        if ($request->has('departure_date') && $request->departure_date != $trip->departure_date) {
+            return response()->json([
+                'message' => 'This trip has a fixed departure date. You must select ' . $trip->departure_date
+            ], 400);
+        }
+    }
+
+    // Check for already booked seats for this specific departure date
     $alreadyBooked = Ticket::where('trip_id', $tripId)
+        ->where('departure_date', $departureDate)
         ->pluck('seat_numbers')
         ->flatten()
         ->toArray();
@@ -96,17 +116,16 @@ public function book(Request $request, $tripId)
     $conflicts = array_intersect($alreadyBooked, $request->seat_numbers);
     if (!empty($conflicts)) {
         return response()->json([
-            'message'   => 'Some seats are already booked',
+            'message'   => 'Some seats are already booked for this date',
             'conflicts' => $conflicts
         ], 409);
     }
 
-    // Decide payment status
     $paymentStatus = $request->payment_method === 'hessabpay' ? 'paid' : 'unpaid';
 
-    // Create one ticket with multiple seats
     $ticket = Ticket::create([
         'trip_id'        => $tripId,
+        'departure_date' => $departureDate,
         'seat_numbers'   => $request->seat_numbers,
         'name'           => $request->name,
         'last_name'      => $request->last_name,
@@ -127,6 +146,7 @@ public function book(Request $request, $tripId)
         'payment_status'      => $ticket->payment_status,
         'booked_seats'        => $ticket->seat_numbers,
         'bus_type'            => $ticket->bus_type,
+        'departure_date'      => $ticket->departure_date,
         'total_seats_booked'  => count($ticket->seat_numbers),
         'trip_details'        => [
             'from'           => $trip->from,
