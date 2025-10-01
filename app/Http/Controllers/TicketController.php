@@ -5,7 +5,8 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use App\Models\Trip;
 use App\Models\Ticket;
-
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 class TicketController extends Controller
 {
     // Show available seats for a specific bus type in a trip
@@ -66,7 +67,8 @@ class TicketController extends Controller
     return ['start' => 1, 'end' => $capacity];
 }
 
-  public function book(Request $request, $tripId)
+
+public function book(Request $request, $tripId)
 {
     $request->validate([
         'seat_numbers'   => 'required|array',
@@ -76,6 +78,7 @@ class TicketController extends Controller
         'phone'          => 'required|string|max:20',
         'payment_method' => 'required|in:hessabpay,doorpay',
         'bus_type'       => 'required|in:VIP,580',
+        'email'          => 'required_if:payment_method,hessabpay|email',
         'departure_date' => 'sometimes'
     ]);
 
@@ -84,29 +87,16 @@ class TicketController extends Controller
         return response()->json(['message' => 'Trip not found'], 404);
     }
 
-    $departureDate = null;
+    // ✅ Handle departure date rules
+    $departureDate = $trip->all_days
+        ? $request->departure_date
+        : $trip->departure_date;
 
-    if ($trip->all_days) {
-        // ✅ Daily trips → require user-provided date
-        if (!$request->has('departure_date')) {
-            return response()->json([
-                'message' => 'Departure date is required for daily available trips'
-            ], 400);
-        }
-        $departureDate = $request->departure_date;
-    } else {
-        // ✅ Fixed-date trips
-        $departureDate = $trip->departure_date;
-
-        // If user provided a departure_date and it does not match → error
-        if ($request->has('departure_date') && $request->departure_date != $trip->departure_date) {
-            return response()->json([
-                'message' => 'This trip has a fixed departure date. You must select ' . $trip->departure_date
-            ], 400);
-        }
+    if ($trip->all_days && !$departureDate) {
+        return response()->json(['message' => 'Departure date is required'], 400);
     }
 
-    // Check for already booked seats for this specific departure date
+    // ✅ Check conflicts
     $alreadyBooked = Ticket::where('trip_id', $tripId)
         ->where('departure_date', $departureDate)
         ->pluck('seat_numbers')
@@ -121,8 +111,10 @@ class TicketController extends Controller
         ], 409);
     }
 
-    $paymentStatus = $request->payment_method === 'hessabpay' ? 'paid' : 'unpaid';
+    // ✅ Default status
+    $paymentStatus = $request->payment_method === 'hessabpay' ? 'pending' : 'unpaid';
 
+    // ✅ Create Ticket (not yet fully paid if hessabpay)
     $ticket = Ticket::create([
         'trip_id'        => $tripId,
         'departure_date' => $departureDate,
@@ -136,26 +128,101 @@ class TicketController extends Controller
         'bus_type'       => $request->bus_type,
     ]);
 
+    // ✅ If HessabPay → create session
+    if ($request->payment_method === 'hessabpay') {
+        $apiKey = env('HESABPAY_API_KEY');
+
+        $payload = [
+    'email' => $ticket->email,
+    'amount' => $trip->price ?? 100,
+    'currency' => 'AFN',
+    'items' => [
+        [
+            'name' => "Bus Ticket - Trip #{$trip->id}",
+            'quantity' => 1,
+            'amount' => $trip->price ?? 100,
+        ]
+    ],
+    'redirect_success_url' => env('HESABPAY_SUCCESS_URL') . "/{$ticket->id}",
+    'redirect_failure_url' => env('HESABPAY_FAILURE_URL') . "/{$ticket->id}",
+];
+
+     $response = Http::withHeaders([
+    'X-API-KEY' => env('HESABPAY_API_KEY'),
+    'Accept'    => 'application/json'
+])->post('https://developers-sandbox.hesab.com/create-session', [
+    'email' => $ticket->email,
+    'amount' => $trip->price ?? 100,
+    'currency' => 'AFN',
+    'redirect_success_url' => env('HESABPAY_SUCCESS_URL') . "/{$ticket->id}",
+    'redirect_failure_url' => env('HESABPAY_FAILURE_URL') . "/{$ticket->id}",
+]);
+
+
+        if ($response->successful()) {
+            $data = $response->json();
+
+            return response()->json([
+                'message' => 'Ticket created, redirect to payment',
+                'ticket'  => $ticket,
+                'payment' => $data   // contains checkout_url
+            ], 201);
+        } else {
+            Log::error('HesabPay Create Session Error:', [
+                'status' => $response->status(),
+                'body'   => $response->body(),
+            ]);
+            return response()->json([
+                'error' => 'Payment session failed',
+                'ticket' => $ticket,
+                'response' => $response->body()
+            ], 500);
+        }
+    }
+
+    // ✅ Doorpay (cash)
     return response()->json([
         'message'             => 'Tickets booked successfully',
-        'customer_name'       => $ticket->name,
-        'customer_last_name'  => $ticket->last_name,
-        'customer_full_name'  => $ticket->name . ' ' . $ticket->last_name,
-        'phone'               => $ticket->phone,
-        'payment_method'      => $ticket->payment_method,
-        'payment_status'      => $ticket->payment_status,
-        'booked_seats'        => $ticket->seat_numbers,
-        'bus_type'            => $ticket->bus_type,
-        'departure_date'      => $ticket->departure_date,
-        'total_seats_booked'  => count($ticket->seat_numbers),
-        'trip_details'        => [
-            'from'           => $trip->from,
-            'to'             => $trip->to,
-            'departure_date' => $trip->departure_date,
-            'departure_time' => $trip->departure_time,
-        ]
+        'ticket'              => $ticket,
+        'trip_details'        => $trip
     ], 201);
 }
+
+
+public function paymentSuccess($ticketId)
+{
+    $ticket = Ticket::find($ticketId);
+
+    if (!$ticket) {
+        return response()->json(['message' => 'Ticket not found'], 404);
+    }
+
+    $ticket->payment_status = 'paid';
+    $ticket->save();
+
+    return response()->json([
+        'message' => 'Payment successful, ticket confirmed',
+        'ticket'  => $ticket
+    ]);
+}
+
+public function paymentFailure($ticketId)
+{
+    $ticket = Ticket::find($ticketId);
+
+    if ($ticket) {
+        $ticket->payment_status = 'failed';
+        $ticket->save();
+    }
+
+    return response()->json([
+        'message' => 'Payment failed',
+        'ticket'  => $ticket
+    ], 400);
+}
+
+
+
 
   // Mark ticket as paid manually (for doorpay)
 public function markAsPaid($ticketId)

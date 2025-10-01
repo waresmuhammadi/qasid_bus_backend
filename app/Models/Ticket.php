@@ -15,7 +15,9 @@ class Ticket extends Model
       'seat_number',
     'bus_type',
     'name',
-    'last_name',   // ✅ new field
+    'last_name',
+    // ✅ new field
+     'email',  
     'phone',
     'payment_method', // ✅ new field
       'status',

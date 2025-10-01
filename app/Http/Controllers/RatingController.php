@@ -93,7 +93,4 @@ public function totalScore($tripId)
     ]);
 }
 
-
-
-
 }

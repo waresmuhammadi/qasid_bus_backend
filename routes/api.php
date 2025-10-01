@@ -117,3 +117,7 @@ Route::get('/trips/{trip}/ratings-count', [RatingController::class, 'count']);
 
 Route::get('/trips/{trip}/ratings-breakdown', [RatingController::class, 'breakdown']);
 Route::get('/trips/{trip}/ratings-total', [RatingController::class, 'totalScore']);
+
+
+Route::get('/payment/success/{ticketId}', [TicketController::class, 'paymentSuccess']);
+Route::get('/payment/failure/{ticketId}', [TicketController::class, 'paymentFailure']);
