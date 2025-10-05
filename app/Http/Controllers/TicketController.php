@@ -7,6 +7,11 @@ use App\Models\Trip;
 use App\Models\Ticket;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+
+use Illuminate\Support\Facades\Mail;
+use App\Mail\TicketBookedMail;
+
+
 class TicketController extends Controller
 {
     // Show available seats for a specific bus type in a trip
@@ -82,6 +87,8 @@ public function book(Request $request, $tripId)
         'departure_date' => 'sometimes'
     ]);
 
+
+
     $trip = Trip::find($tripId);
     if (!$trip) {
         return response()->json(['message' => 'Trip not found'], 404);
@@ -127,6 +134,13 @@ public function book(Request $request, $tripId)
         'payment_status' => $paymentStatus,
         'bus_type'       => $request->bus_type,
     ]);
+
+   try {
+    Mail::to('arianniy800@gmail.com')->send(new TicketBookedMail($ticket, $trip));
+} catch (\Exception $e) {
+    \Log::error('Mail sending failed: '.$e->getMessage());
+}
+
 
     // ✅ If HessabPay → create session
     if ($request->payment_method === 'hessabpay') {
