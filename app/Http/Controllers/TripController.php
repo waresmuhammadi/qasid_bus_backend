@@ -139,6 +139,7 @@ class TripController extends Controller
 
 
     // Update a trip
+// Update a trip
 public function update(Request $request, $id)
 {
     $company = $request->get('company');
@@ -147,21 +148,29 @@ public function update(Request $request, $id)
     if (!$trip) {
         return response()->json(['message' => 'Trip not found'], 404);
     }
-
-    $request->validate([
-        'from' => 'sometimes|required|string|max:255',
-        'to' => 'sometimes|required|string|max:255',
-        'departure_date_jalali.year' => 'sometimes|required|integer',
-        'departure_date_jalali.month' => 'sometimes|required|integer',
-        'departure_date_jalali.day' => 'sometimes|required|integer',
-        'departure_terminal' => 'sometimes|required|string|max:255',
-        'arrival_terminal' => 'sometimes|required|string|max:255',
-        'bus_type' => 'sometimes|required|array',
-        'bus_type.*' => 'in:VIP,580',
-        'price_vip' => 'required_if:bus_type,VIP|numeric|min:0',
-        'price_580' => 'required_if:bus_type,580|numeric|min:0',
-        'all_days' => 'boolean',
-    ]);
+$request->validate([
+    'from' => 'sometimes|required|string|max:255',
+    'to' => 'sometimes|required|string|max:255',
+    'departure_date_jalali.year' => 'sometimes|required|integer',
+    'departure_date_jalali.month' => 'sometimes|required|integer',
+    'departure_date_jalali.day' => 'sometimes|required|integer',
+    'departure_terminal' => 'sometimes|required|string|max:255',
+    'arrival_terminal' => 'sometimes|required|string|max:255',
+    'bus_type' => 'sometimes|required|array',
+    'bus_type.*' => 'in:VIP,580',
+    // ✅ FIX: Conditional validation - only require price if bus type is selected
+    'price_vip' => function ($attribute, $value, $fail) use ($request) {
+        if (in_array('VIP', $request->bus_type ?? []) && (is_null($value) || $value === '')) {
+            $fail('The VIP price is required when VIP bus type is selected.');
+        }
+    },
+    'price_580' => function ($attribute, $value, $fail) use ($request) {
+        if (in_array('580', $request->bus_type ?? []) && (is_null($value) || $value === '')) {
+            $fail('The 580 price is required when 580 bus type is selected.');
+        }
+    },
+    'all_days' => 'boolean',
+]);
 
     $data = $request->all();
 
@@ -229,10 +238,31 @@ public function update(Request $request, $id)
         }
     }
 
+    // ✅ FIX: Handle prices update when bus types change
+    if ($request->has('bus_type')) {
+        $prices = [];
+        
+        // Update VIP price if VIP is in bus types
+        if (in_array('VIP', $request->bus_type) && $request->has('price_vip')) {
+            $prices['VIP'] = $request->price_vip;
+        }
+        
+        // Update 580 price if 580 is in bus types
+        if (in_array('580', $request->bus_type) && $request->has('price_580')) {
+            $prices['580'] = $request->price_580;
+        }
+        
+        // Set the updated prices
+        $data['prices'] = $prices;
+    }
+
     // Update trip
     $trip->update($data);
 
-    // Format trip for response (if you have a formatter method)
+    // Refresh the trip to get updated data
+    $trip->refresh();
+
+    // Format trip for response
     if (method_exists($this, 'formatTrip')) {
         $trip = $this->formatTrip($trip);
     }
