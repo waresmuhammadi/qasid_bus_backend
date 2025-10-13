@@ -11,6 +11,7 @@ class Ticket extends Model
 
    protected $fillable = [
     'trip_id',
+    'ticket_number',
     'seat_numbers',
       'seat_number',
     'bus_type',
@@ -22,6 +23,7 @@ class Ticket extends Model
     'payment_method', // ✅ new field
       'status',
        'departure_date',
+       'transaction_id',
 ];
     public function trip()
     {

@@ -119,5 +119,13 @@ Route::get('/trips/{trip}/ratings-breakdown', [RatingController::class, 'breakdo
 Route::get('/trips/{trip}/ratings-total', [RatingController::class, 'totalScore']);
 
 
+// TO:
 Route::get('/payment/success/{ticketId}', [TicketController::class, 'paymentSuccess']);
-Route::get('/payment/failure/{ticketId}', [TicketController::class, 'paymentFailure']);
+Route::get('/payment/success', [TicketController::class, 'paymentSuccess']); 
+
+
+
+Route::post('/tickets/{ticketId}/cancel', [TicketController::class, 'cancelTicket']);
+Route::post('/tickets/arrived', [TicketController::class, 'markAsArrived']);
+
+Route::get('/tickets/{ticket}', [TicketController::class, 'show']);

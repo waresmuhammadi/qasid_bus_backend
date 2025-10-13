@@ -88,6 +88,8 @@ public function book(Request $request, $tripId)
     ]);
 
 
+// ✅ Generate unique ticket number
+$ticketNumber = $this->generateUniqueTicketNumber();
 
     $trip = Trip::find($tripId);
     if (!$trip) {
@@ -122,8 +124,10 @@ public function book(Request $request, $tripId)
     $paymentStatus = $request->payment_method === 'hessabpay' ? 'pending' : 'unpaid';
 
     // ✅ Create Ticket (not yet fully paid if hessabpay)
+    $ticketNumber = $this->generateUniqueTicketNumber();
     $ticket = Ticket::create([
         'trip_id'        => $tripId,
+        'ticket_number'   => $ticketNumber,
         'departure_date' => $departureDate,
         'seat_numbers'   => $request->seat_numbers,
         'name'           => $request->name,
@@ -146,31 +150,26 @@ public function book(Request $request, $tripId)
     if ($request->payment_method === 'hessabpay') {
         $apiKey = env('HESABPAY_API_KEY');
 
-        $payload = [
-    'email' => $ticket->email,
-    'amount' => $trip->price ?? 100,
-    'currency' => 'AFN',
-    'items' => [
-        [
-            'name' => "Bus Ticket - Trip #{$trip->id}",
-            'quantity' => 1,
-            'amount' => $trip->price ?? 100,
-        ]
-    ],
-    'redirect_success_url' => env('HESABPAY_SUCCESS_URL') . "/{$ticket->id}",
-    'redirect_failure_url' => env('HESABPAY_FAILURE_URL') . "/{$ticket->id}",
+      $items = [
+    [
+        'id' => 'TKT-' . $ticket->id,  // unique ID per ticket
+        'name' => "Bus Ticket - Trip #{$trip->id}",
+        'price' => $trip->price ?? 100, 
+        'quantity' => 1,
+    ]
 ];
 
-     $response = Http::withHeaders([
-    'X-API-KEY' => env('HESABPAY_API_KEY'),
-    'Accept'    => 'application/json'
-])->post('https://developers-sandbox.hesab.com/create-session', [
+$response = Http::withHeaders([
+    'Authorization' => 'API-KEY ' . env('HESABPAY_API_KEY'),
+    'Accept'        => 'application/json',
+])->post(env('HESABPAY_BASE_URL') . '/payment/create-session', [
     'email' => $ticket->email,
-    'amount' => $trip->price ?? 100,
+    'items' => $items,
     'currency' => 'AFN',
     'redirect_success_url' => env('HESABPAY_SUCCESS_URL') . "/{$ticket->id}",
     'redirect_failure_url' => env('HESABPAY_FAILURE_URL') . "/{$ticket->id}",
 ]);
+
 
 
         if ($response->successful()) {
@@ -202,23 +201,50 @@ public function book(Request $request, $tripId)
     ], 201);
 }
 
-
-public function paymentSuccess($ticketId)
+public function paymentSuccess(Request $request, $ticketId)
 {
     $ticket = Ticket::find($ticketId);
-
     if (!$ticket) {
-        return response()->json(['message' => 'Ticket not found'], 404);
+        return response()->json(['error' => 'Ticket not found'], 404);
     }
 
-    $ticket->payment_status = 'paid';
-    $ticket->save();
+    // Decode HessabPay query data
+    $dataParam = $request->query('data');
+    $decoded = urldecode($dataParam);
+    $data = json_decode($decoded, true);
 
-    return response()->json([
-        'message' => 'Payment successful, ticket confirmed',
-        'ticket'  => $ticket
-    ]);
+    if (json_last_error() !== JSON_ERROR_NONE || !$data) {
+        return redirect(env('FRONTEND_URL') . '/payment-error?message=Invalid+data');
+    }
+
+    $transactionId = $data['transaction_id'] ?? null;
+    $success = $data['success'] ?? false;
+
+    if ($success && $transactionId) {
+        // ✅ Update ticket payment status
+        $ticket->update([
+            'payment_status' => 'paid',
+            'transaction_id' => $transactionId,
+        ]);
+
+        // ✅ Get the company API URL from the trip
+        $trip = Trip::find($ticket->trip_id);
+        $companyApiUrl = $trip->company_api_url ?? env('APP_URL'); // Fallback to your main URL
+
+        // ✅ CRITICAL FIX: Include company_api_url in redirect
+        return redirect(
+            env('FRONTEND_URL') . 
+            "/done?" . 
+            "ticket_id={$ticketId}&" .
+            "transaction_id={$transactionId}&" .
+            "company_api_url=" . urlencode($companyApiUrl)
+        );
+    }
+
+    $ticket->update(['payment_status' => 'failed']);
+    return redirect(env('FRONTEND_URL') . "/payment-error?ticket_id={$ticketId}");
 }
+
 
 public function paymentFailure($ticketId)
 {
@@ -260,6 +286,21 @@ public function markAsPaid($ticketId)
     ]);
 }
 
+public function show($id)
+{
+    $ticket = Ticket::with('trip')->find($id); // include trip relationship
+
+    if (!$ticket) {
+        return response()->json(['message' => 'Ticket not found'], 404);
+    }
+
+    $trip = $ticket->trip;
+
+    return response()->json([
+        'ticket' => $ticket,
+        'trip' => $trip,   // include trip details
+    ], 200);
+}
 
 
 
@@ -330,4 +371,64 @@ public function markAsPaid($ticketId)
             'message' => 'Bus and driver assigned to selected tickets successfully!',
         ]);
     }
+
+
+
+
+
+    public function cancelTicket($ticketId)
+{
+    $ticket = Ticket::find($ticketId);
+
+    if (!$ticket) {
+        return response()->json(['message' => 'Ticket not found'], 404);
+    }
+
+    $ticket->status = 'cancelled';
+    $ticket->save();
+
+    return response()->json([
+        'message' => 'Ticket cancelled successfully.',
+        'ticket'  => $ticket
+    ]);
+}
+
+
+// Mark ticket(s) as arrived
+public function markAsArrived(Request $request)
+{
+    $request->validate([
+        'ticket_ids'   => 'required|array',
+        'ticket_ids.*' => 'exists:tickets,id',
+    ]);
+
+    $tickets = Ticket::whereIn('id', $request->ticket_ids)->get();
+
+    if ($tickets->isEmpty()) {
+        return response()->json(['message' => 'No valid tickets found'], 404);
+    }
+
+    foreach ($tickets as $ticket) {
+        $ticket->status = 'arrived';
+        $ticket->save();
+    }
+
+    return response()->json([
+        'message' => 'Ticket(s) marked as arrived successfully!',
+        'tickets' => $tickets
+    ]);
+}
+
+private function generateUniqueTicketNumber()
+{
+    do {
+        // Example format: TKT-20251008-ABC123
+        $ticketNumber = 'TKT-' . date('Ymd') . '-' . strtoupper(substr(uniqid(), -6));
+    } while (Ticket::where('ticket_number', $ticketNumber)->exists());
+
+    return $ticketNumber;
+}
+
+
+
 }

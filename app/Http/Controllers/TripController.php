@@ -83,7 +83,7 @@ class TripController extends Controller
     $request->validate([
         'from' => 'required|string|max:255',
         'to' => 'required|string|max:255',
-        'departure_time' => 'required|date_format:H:i',
+        'departure_time' => 'required|string',
         'departure_terminal' => 'required|string|max:255',
         'arrival_terminal' => 'required|string|max:255',
         'bus_type' => 'required|array',
@@ -94,6 +94,10 @@ class TripController extends Controller
     ]);
 
     $company = $request->get('company');
+    $departureTime = $request->departure_time;
+if (preg_match('/(AM|PM)$/i', $departureTime)) {
+    $departureTime = date("H:i", strtotime($departureTime));
+}
 
     // Departure date only if not all_days
     $departureDate = null;
@@ -120,7 +124,7 @@ class TripController extends Controller
         'company_id' => $company['id'],
         'from' => $request->from,
         'to' => $request->to,
-        'departure_time' => $request->departure_time,
+        'departure_time' => $departureTime,
         'departure_date' => $departureDate, // null if all_days = true
         'departure_terminal' => $request->departure_terminal,
         'arrival_terminal' => $request->arrival_terminal,
