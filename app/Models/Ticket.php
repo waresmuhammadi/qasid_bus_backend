@@ -19,6 +19,7 @@ class Ticket extends Model
     'last_name',
     // ✅ new field
      'email',  
+     'address',
     'phone',
     'payment_method', // ✅ new field
       'status',

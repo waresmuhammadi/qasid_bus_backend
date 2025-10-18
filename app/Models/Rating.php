@@ -9,7 +9,7 @@ class Rating extends Model
 {
     use HasFactory;
 
-    protected $fillable = ['trip_id', 'rate'];
+    protected $fillable = ['trip_id', 'rate', 'review'];
 
     public function trip()
     {

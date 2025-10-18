@@ -34,10 +34,11 @@ class TicketController extends Controller
     }
 
     // ✅ FIX: get booked seats correctly
-    $bookedSeats = Ticket::where('trip_id', $tripId)
-        ->pluck('seat_numbers')
-        ->flatten()
-        ->toArray();
+   $bookedSeats = Ticket::where('trip_id', $tripId)
+    ->where('status', '!=', 'cancelled')
+    ->pluck('seat_numbers')
+    ->flatten()
+    ->toArray();
 
     $seatRange = $this->getSeatRangeForBusType($trip->bus_type, $busType);
 
@@ -84,6 +85,7 @@ public function book(Request $request, $tripId)
         'payment_method' => 'required|in:hessabpay,doorpay',
         'bus_type'       => 'required|in:VIP,580',
         'email'          => 'required_if:payment_method,hessabpay|email',
+        'address'        => 'required_if:payment_method,doorpay|string|max:500',
         'departure_date' => 'sometimes'
     ]);
 
@@ -106,11 +108,14 @@ $ticketNumber = $this->generateUniqueTicketNumber();
     }
 
     // ✅ Check conflicts
-    $alreadyBooked = Ticket::where('trip_id', $tripId)
-        ->where('departure_date', $departureDate)
-        ->pluck('seat_numbers')
-        ->flatten()
-        ->toArray();
+   $alreadyBooked = Ticket::where('trip_id', $tripId)
+    ->where('departure_date', $departureDate)
+    ->where('status', '!=', 'cancelled') // ✅ ignore cancelled tickets
+    ->where('payment_status', '!=', 'failed') // ✅ ignore failed payments
+    ->pluck('seat_numbers')
+    ->flatten()
+    ->toArray();
+
 
     $conflicts = array_intersect($alreadyBooked, $request->seat_numbers);
     if (!empty($conflicts)) {
@@ -134,6 +139,7 @@ $ticketNumber = $this->generateUniqueTicketNumber();
         'last_name'      => $request->last_name,
         'phone'          => $request->phone,
         'email'          => $request->email ?? null,
+        'address'        => $request->address ?? null,
         'payment_method' => $request->payment_method,
         'payment_status' => $paymentStatus,
         'bus_type'       => $request->bus_type,
@@ -376,7 +382,7 @@ public function show($id)
 
 
 
-    public function cancelTicket($ticketId)
+public function cancelTicket($ticketId)
 {
     $ticket = Ticket::find($ticketId);
 
@@ -384,11 +390,12 @@ public function show($id)
         return response()->json(['message' => 'Ticket not found'], 404);
     }
 
+    // ✅ Mark the ticket as cancelled
     $ticket->status = 'cancelled';
     $ticket->save();
 
     return response()->json([
-        'message' => 'Ticket cancelled successfully.',
+        'message' => 'Ticket cancelled successfully. Seats are now free.',
         'ticket'  => $ticket
     ]);
 }

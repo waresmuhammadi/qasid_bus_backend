@@ -120,8 +120,8 @@ Route::get('/trips/{trip}/ratings-total', [RatingController::class, 'totalScore'
 
 
 // TO:
-Route::get('/payment/success/{ticketId}', [TicketController::class, 'paymentSuccess']);
-Route::get('/payment/success', [TicketController::class, 'paymentSuccess']); 
+Route::get('/done/{ticketId}', [TicketController::class, 'paymentSuccess']);
+
 
 
 
@@ -129,3 +129,5 @@ Route::post('/tickets/{ticketId}/cancel', [TicketController::class, 'cancelTicke
 Route::post('/tickets/arrived', [TicketController::class, 'markAsArrived']);
 
 Route::get('/tickets/{ticket}', [TicketController::class, 'show']);
+
+Route::get('/trips/{tripId}/reviews', [RatingController::class, 'reviews']);
