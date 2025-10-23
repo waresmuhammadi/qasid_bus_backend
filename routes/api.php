@@ -5,10 +5,13 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\TripController;
 use App\Http\Controllers\authController;
 use App\Http\Controllers\BusController;
+use App\Http\Controllers\CouponController;
+use App\Http\Controllers\TicketController;
 
 Route::get('/user', function (Request $request) {
     return $request->user();
 })->middleware('auth:sanctum');
+
 
 
 
@@ -48,6 +51,15 @@ Route::middleware('company.auth')->group(function () {
      Route::post('/trips/{tripId}/reserve', [TripController::class, 'reserve']);
 Route::get('/trips/{tripId}/availability', [TripController::class, 'availability']);
 
+    
+Route::prefix('coupons')->group(function () {
+    Route::get('/', [CouponController::class, 'index']);          // List all
+    Route::get('/{id}', [CouponController::class, 'show']);       // Single coupon
+    Route::post('/', [CouponController::class, 'store']);         // Create
+    Route::put('/{id}', [CouponController::class, 'update']);     // Update
+    Route::delete('/{id}', [CouponController::class, 'destroy']); // Delete
+});
+
 
 });
      Route::get('/trips', [TripController::class, 'index']);
@@ -83,7 +95,7 @@ Route::put('/drivers/{id}', [DriverController::class, 'updateDriver']);
 // Delete a driver
 Route::delete('/drivers/{id}', [DriverController::class, 'deleteDriver']);
 
-use App\Http\Controllers\TicketController;
+
 
 Route::get('/trips/{tripId}/seats', [TicketController::class, 'availableSeats']);
 
@@ -131,3 +143,16 @@ Route::post('/tickets/arrived', [TicketController::class, 'markAsArrived']);
 Route::get('/tickets/{ticket}', [TicketController::class, 'show']);
 
 Route::get('/trips/{tripId}/reviews', [RatingController::class, 'reviews']);
+
+
+// Mark a single ticket as in_processing
+Route::post('tickets/{ticketId}/processing', [TicketController::class, 'markAsProcessing']);
+
+
+// Bulk mark tickets as in_processing
+Route::post('tickets/bulk-processing', [TicketController::class, 'bulkMarkAsProcessing']);
+
+
+ Route::post('tickets/{ticketId}/riding', [TicketController::class, 'markTicketsAsRiding']);
+    // Bulk tickets
+    Route::post('tickets/bulk-riding', [TicketController::class, 'markTicketsAsRiding']);

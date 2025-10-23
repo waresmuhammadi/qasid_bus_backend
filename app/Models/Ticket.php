@@ -23,8 +23,11 @@ class Ticket extends Model
     'phone',
     'payment_method', // ✅ new field
       'status',
+        'from',
        'departure_date',
        'transaction_id',
+       'coupon_code',
+       'final_price'
 ];
     public function trip()
     {
