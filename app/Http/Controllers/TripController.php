@@ -42,10 +42,10 @@ class TripController extends Controller
 
 
     // Public trips with filtering
-  public function publicIndex(Request $request)
+public function publicIndex(Request $request)
 {
     $query = Trip::query();
-    
+
     if ($request->has('company_id')) {
         $query->where('company_id', $request->query('company_id'));
     }
@@ -60,9 +60,9 @@ class TripController extends Controller
 
     if ($request->has('date')) {
         $date = $request->query('date');
-        $query->where(function($q) use ($date) {
+        $query->where(function ($q) use ($date) {
             $q->where('departure_date', $date)
-              ->orWhere('all_days', true); // match trips that are available every day
+              ->orWhere('all_days', true);
         });
     }
 
@@ -72,11 +72,66 @@ class TripController extends Controller
     }
 
     $trips = $query->get();
-    $trips->transform(fn($trip) => $this->formatTrip($trip));
+
+    // --- CRITICAL FIX: Handle both Gregorian and Jalali dates ---
+    $now = now()->setTimezone('Asia/Kabul');
+    $currentTime = $now->format('H:i:s');
+    $requestedDate = $request->query('date');
+
+    $trips->transform(function ($trip) use ($currentTime, $now, $requestedDate) {
+        $isToday = false;
+        
+        if ($trip->all_days && $requestedDate) {
+            // For all_days trips with requested date
+            if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $requestedDate) && substr($requestedDate, 0, 2) === '14') {
+                // Jalali date requested
+                try {
+                    $jalaliParts = explode('-', $requestedDate);
+                    $jalalian = new Jalalian((int)$jalaliParts[0], (int)$jalaliParts[1], (int)$jalaliParts[2]);
+                    $gregorianRequested = $jalalian->toCarbon()->format('Y-m-d');
+                    $todayGregorian = $now->format('Y-m-d');
+                    $isToday = ($gregorianRequested === $todayGregorian);
+                } catch (\Exception $e) {
+                    $isToday = false;
+                }
+            } else {
+                // Gregorian date requested
+                $todayGregorian = $now->format('Y-m-d');
+                $isToday = ($requestedDate === $todayGregorian);
+            }
+            
+            $trip->can_book = $isToday ? ($trip->departure_time > $currentTime) : true;
+        } else if (!$trip->all_days && $trip->departure_date) {
+            // For specific date trips
+            if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $trip->departure_date) && substr($trip->departure_date, 0, 2) === '14') {
+                // Jalali departure date
+                try {
+                    $jalaliParts = explode('-', $trip->departure_date);
+                    $jalalian = new Jalalian((int)$jalaliParts[0], (int)$jalaliParts[1], (int)$jalaliParts[2]);
+                    $gregorianDeparture = $jalalian->toCarbon()->format('Y-m-d');
+                    $todayGregorian = $now->format('Y-m-d');
+                    $isToday = ($gregorianDeparture === $todayGregorian);
+                } catch (\Exception $e) {
+                    $isToday = false;
+                }
+            } else {
+                // Gregorian departure date
+                $todayGregorian = $now->format('Y-m-d');
+                $isToday = ($trip->departure_date === $todayGregorian);
+            }
+            
+            $trip->can_book = $isToday ? ($trip->departure_time > $currentTime) : true;
+        } else {
+            $trip->can_book = true;
+        }
+
+        // Format trip for display
+        $trip = $this->formatTrip($trip);
+        return $trip;
+    });
 
     return response()->json($trips);
 }
-
     // Store a new trip
   public function store(Request $request)
 {

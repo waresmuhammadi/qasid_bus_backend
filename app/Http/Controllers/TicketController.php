@@ -5,6 +5,8 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use App\Models\Trip;
 use App\Models\Ticket;
+use App\Models\Coupon;
+
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -33,12 +35,13 @@ class TicketController extends Controller
         return response()->json(['message' => 'This bus type is not available for this trip'], 400);
     }
 
-    // ✅ FIX: get booked seats correctly
-   $bookedSeats = Ticket::where('trip_id', $tripId)
-    ->where('status', '!=', 'cancelled')
-    ->pluck('seat_numbers')
-    ->flatten()
-    ->toArray();
+    // ✅ FIXED: Get booked seats for THIS bus type only
+    $bookedSeats = Ticket::where('trip_id', $tripId)
+        ->where('bus_type', $busType) // ← CRITICAL: Add this line
+        ->where('status', '!=', 'cancelled')
+        ->pluck('seat_numbers')
+        ->flatten()
+        ->toArray();
 
     $seatRange = $this->getSeatRangeForBusType($trip->bus_type, $busType);
 
@@ -72,9 +75,9 @@ class TicketController extends Controller
 
     return ['start' => 1, 'end' => $capacity];
 }
+
 public function book(Request $request, $tripId)
 {
-    // ✅ Validation including optional coupon
     $request->validate([
         'seat_numbers'   => 'required|array',
         'seat_numbers.*' => 'integer',
@@ -89,7 +92,6 @@ public function book(Request $request, $tripId)
         'coupon_code'    => 'nullable|string|exists:coupons,code'
     ]);
 
-    // ✅ Generate unique ticket number
     $ticketNumber = $this->generateUniqueTicketNumber();
 
     $trip = Trip::find($tripId);
@@ -97,7 +99,7 @@ public function book(Request $request, $tripId)
         return response()->json(['message' => 'Trip not found'], 404);
     }
 
-    // ✅ Handle departure date rules
+    // Determine departure date
     $departureDate = $trip->all_days
         ? $request->departure_date
         : $trip->departure_date;
@@ -106,8 +108,9 @@ public function book(Request $request, $tripId)
         return response()->json(['message' => 'Departure date is required'], 400);
     }
 
-    // ✅ Check conflicts (already booked seats)
+    // Check for seat conflicts
     $alreadyBooked = Ticket::where('trip_id', $tripId)
+        ->where('bus_type', $request->bus_type)
         ->where('departure_date', $departureDate)
         ->where('status', '!=', 'cancelled')
         ->where('payment_status', '!=', 'failed')
@@ -118,21 +121,19 @@ public function book(Request $request, $tripId)
     $conflicts = array_intersect($alreadyBooked, $request->seat_numbers);
     if (!empty($conflicts)) {
         return response()->json([
-            'message'   => 'Some seats are already booked for this date',
+            'message'   => 'Some seats are already booked for this date and bus type',
             'conflicts' => $conflicts
         ], 409);
     }
 
-    // ✅ Default payment status
-    $paymentStatus = $request->payment_method === 'hessabpay' ? 'pending' : 'unpaid';
+    // ✅ CLEAR PAYMENT STATUS LOGIC - ONLY 3 VALUES: paid, unpaid, in_processing
+    $paymentStatus = $request->payment_method === 'hessabpay' ? 'paid' : 'in_processing';
 
-    // ✅ Base price from trip for selected bus type
+    // Base price calculation
     $basePrice = $trip->prices[$request->bus_type] ?? 0;
-
-    // ✅ Number of seats selected
     $seatCount = count($request->seat_numbers);
 
-    // ✅ Handle coupon (applied once to total)
+    // Handle coupon
     $couponCode = $request->coupon_code;
     $discountAmount = 0;
     if ($couponCode) {
@@ -142,10 +143,9 @@ public function book(Request $request, $tripId)
         }
     }
 
-    // ✅ Final price: total seats price minus single coupon amount
     $finalPrice = max(($basePrice * $seatCount) - $discountAmount, 0);
 
-    // ✅ Create ticket
+    // ✅ Create ticket - REMOVE THE STATUS FIELD COMPLETELY
     $ticket = Ticket::create([
         'trip_id'         => $tripId,
         'ticket_number'   => $ticketNumber,
@@ -157,28 +157,29 @@ public function book(Request $request, $tripId)
         'email'           => $request->email ?? null,
         'address'         => $request->address ?? null,
         'payment_method'  => $request->payment_method,
-        'payment_status'  => $paymentStatus,
+        'payment_status'  => $paymentStatus, // ✅ paid OR in_processing ONLY
         'bus_type'        => $request->bus_type,
         'coupon_code'     => $couponCode,
         'discount_amount' => $discountAmount,
         'final_price'     => $finalPrice,
+        // ✅ REMOVED: 'status' => 'booked' - Let the database use its default value
     ]);
 
-    // ✅ Capture website info
+    // Capture website info
     $ticket->from_website = $request->from_website
         ?? $request->header('Origin')
         ?? $request->header('Referer')
         ?? request()->getSchemeAndHttpHost();
     $ticket->save();
 
-    // ✅ Send email (optional)
+    // Send email
     try {
         Mail::to('arianniy800@gmail.com')->send(new TicketBookedMail($ticket, $trip));
     } catch (\Exception $e) {
         \Log::error('Mail sending failed: ' . $e->getMessage());
     }
 
-    // ✅ If HessabPay → create session
+    // If HessabPay → create session
     if ($request->payment_method === 'hessabpay') {
         $items = [
             [
@@ -220,15 +221,15 @@ public function book(Request $request, $tripId)
         }
     }
 
-    // ✅ Doorpay (cash)
+    // Doorpay response
     return response()->json([
-        'message'      => 'Tickets booked successfully',
-        'ticket'       => $ticket,
-        'final_price'  => $ticket->final_price,
-        'trip_details' => $trip
+        'message'       => 'Tickets booked successfully - Payment in processing',
+        'ticket'        => $ticket,
+        'final_price'   => $ticket->final_price,
+        'trip_details'  => $trip,
+        'payment_status'=> $ticket->payment_status // This will be 'in_processing'
     ], 201);
 }
-
 
 
 
@@ -522,7 +523,74 @@ public function markTicketsAsRiding(Request $request, $ticketId = null)
     ], 200);
 }
 
+public function generateFeedbackLink(Request $request)
+{
+    $request->validate([
+        'trip_id'      => 'required|exists:trips,id',
+        'company_name' => 'required|string|max:255',
+        'subdomain'    => 'required|string|max:255', // now required in body
+    ]);
 
+    $trip = Trip::find($request->trip_id);
+
+    // Generate the feedback link with subdomain from body
+    $feedbackLink = env('FRONTEND_URL') 
+        . "/feedbackpage?" . http_build_query([
+            'trip_id'      => $trip->id,
+            'company_name' => $request->company_name,
+            'from'         => $trip->from ?? 'Unknown',
+            'to'           => $trip->to ?? 'Unknown',
+            'subdomain'    => $request->subdomain,
+        ]);
+
+    return response()->json([
+        'message'       => 'Feedback link generated successfully',
+        'feedback_link' => $feedbackLink
+    ], 200);
+}
+
+
+// In your CouponController.php
+
+
+public function getCoupons()
+{
+    // Fetch all coupons
+    $coupons = Coupon::all();
+
+    // Optionally, you can filter active coupons
+    // $coupons = Coupon::where('status', 'active')->get();
+
+    // Return as JSON for your frontend
+    return response()->json([
+        'success' => true,
+        'data' => $coupons
+    ]);
+}
+
+// ✅ Mark a ticket payment as "in_processing"
+public function markPaymentAsProcessing($ticketId)
+{
+    $ticket = Ticket::find($ticketId);
+
+    if (!$ticket) {
+        return response()->json(['message' => 'Ticket not found'], 404);
+    }
+
+    // Check if already in processing
+    if ($ticket->payment_status === 'in_processing') {
+        return response()->json(['message' => 'Ticket payment is already in processing'], 400);
+    }
+
+    // Update status
+    $ticket->payment_status = 'in_processing';
+    $ticket->save();
+
+    return response()->json([
+        'message' => 'Ticket payment marked as in processing successfully',
+        'ticket'  => $ticket
+    ], 200);
+}
 
 
 }

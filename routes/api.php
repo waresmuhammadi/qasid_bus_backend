@@ -156,3 +156,11 @@ Route::post('tickets/bulk-processing', [TicketController::class, 'bulkMarkAsProc
  Route::post('tickets/{ticketId}/riding', [TicketController::class, 'markTicketsAsRiding']);
     // Bulk tickets
     Route::post('tickets/bulk-riding', [TicketController::class, 'markTicketsAsRiding']);
+
+    Route::post('/generate-feedback-link', [TicketController::class, 'generateFeedbackLink']);
+
+
+    Route::get('/coupons', [TicketController::class, 'getCoupons']);
+
+
+Route::post('/tickets/{ticketId}/mark-payment-inprocessing', [TicketController::class, 'markPaymentAsProcessing']);
