@@ -16,29 +16,36 @@ use App\Mail\TicketBookedMail;
 
 class TicketController extends Controller
 {
-    // Show available seats for a specific bus type in a trip
-    public function availableSeats(Request $request, $tripId)
+  public function availableSeats(Request $request, $tripId)
 {
     $request->validate([
-        'bus_type' => 'required|in:VIP,580',
+        'bus_type'       => 'required|in:VIP,580',
+        'departure_date' => 'nullable|date'
     ]);
 
     $busType = $request->bus_type;
-
     $trip = Trip::find($tripId);
 
     if (!$trip) {
         return response()->json(['message' => 'Trip not found'], 404);
     }
 
+    // Check if the bus type exists for this trip
     if (!in_array($busType, $trip->bus_type)) {
         return response()->json(['message' => 'This bus type is not available for this trip'], 400);
     }
 
-    // ✅ FIXED: Get booked seats for THIS bus type only
+    // Determine which date to check
+    $departureDate = $trip->all_days
+        ? ($request->departure_date ?? now()->toDateString()) // must specify for all_day trips
+        : $trip->departure_date;
+
+    // ✅ Now include departure_date in the booked seat filter
     $bookedSeats = Ticket::where('trip_id', $tripId)
-        ->where('bus_type', $busType) // ← CRITICAL: Add this line
+        ->where('bus_type', $busType)
+        ->where('departure_date', $departureDate)
         ->where('status', '!=', 'cancelled')
+        ->where('payment_status', '!=', 'failed')
         ->pluck('seat_numbers')
         ->flatten()
         ->toArray();
@@ -64,10 +71,12 @@ class TicketController extends Controller
     return response()->json([
         'trip'              => $trip,
         'selected_bus_type' => $busType,
+        'departure_date'    => $departureDate,
         'seats'             => $seats,
         'total_capacity'    => $capacity,
     ]);
 }
+
     // Helper method to get seat range for a specific bus type
    private function getSeatRangeForBusType($tripBusTypes, $selectedBusType)
 {
@@ -591,6 +600,9 @@ public function markPaymentAsProcessing($ticketId)
         'ticket'  => $ticket
     ], 200);
 }
+
+
+
 
 
 }

@@ -21,6 +21,7 @@ class Trip extends Model
         'bus_type',
          'all_days',
          'actual_departure_date',
+         'chalan_number'
     ];
     
     protected $casts = [

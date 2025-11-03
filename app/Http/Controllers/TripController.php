@@ -133,7 +133,7 @@ public function publicIndex(Request $request)
     return response()->json($trips);
 }
     // Store a new trip
-  public function store(Request $request)
+public function store(Request $request)
 {
     $request->validate([
         'from' => 'required|string|max:255',
@@ -146,27 +146,63 @@ public function publicIndex(Request $request)
         'price_vip' => 'required_if:bus_type,VIP|numeric|min:0',
         'price_580' => 'required_if:bus_type,580|numeric|min:0',
         'all_days' => 'boolean',
+        'departure_dates_jalali' => 'sometimes|array',
+        'departure_dates_jalali.*.year' => 'required_with:departure_dates_jalali|integer',
+        'departure_dates_jalali.*.month' => 'required_with:departure_dates_jalali|integer',
+        'departure_dates_jalali.*.day' => 'required_with:departure_dates_jalali|integer',
     ]);
 
     $company = $request->get('company');
     $departureTime = $request->departure_time;
-if (preg_match('/(AM|PM)$/i', $departureTime)) {
-    $departureTime = date("H:i", strtotime($departureTime));
-}
 
-    // Departure date only if not all_days
-    $departureDate = null;
-    if (!$request->boolean('all_days')) {
-        $request->validate([
-            'departure_date_jalali.year' => 'required|integer',
-            'departure_date_jalali.month' => 'required|integer',
-            'departure_date_jalali.day' => 'required|integer',
-        ]);
-        $jalali = $request->departure_date_jalali;
-        $departureDate = sprintf("%04d-%02d-%02d", $jalali['year'], $jalali['month'], $jalali['day']);
+    // Convert AM/PM to 24h format if needed
+    if (preg_match('/(AM|PM)$/i', $departureTime)) {
+        $departureTime = date("H:i", strtotime($departureTime));
     }
 
-    // Create price array based on bus types
+    // Prepare departure dates (range)
+    $departureDates = [];
+
+    if ($request->boolean('all_days')) {
+        $departureDates = null;
+    } elseif ($request->has('departure_dates_jalali') && is_array($request->departure_dates_jalali)) {
+        $now = now()->setTimezone('Asia/Kabul')->format('Y-m-d');
+
+        foreach ($request->departure_dates_jalali as $jalali) {
+            if (!isset($jalali['year'], $jalali['month'], $jalali['day'])) {
+                return response()->json([
+                    'message' => 'Each Jalali date must have year, month, and day'
+                ], 422);
+            }
+
+            try {
+                $jalalian = new \Morilog\Jalali\Jalalian(
+                    $jalali['year'],
+                    $jalali['month'],
+                    $jalali['day']
+                );
+                $gregorianDate = $jalalian->toCarbon()->format('Y-m-d');
+
+                if ($gregorianDate < $now) {
+                    return response()->json([
+                        'message' => "Cannot select past date: {$jalali['day']}/{$jalali['month']}/{$jalali['year']}"
+                    ], 422);
+                }
+
+                $departureDates[] = $gregorianDate;
+            } catch (\Exception $e) {
+                return response()->json([
+                    'message' => 'Invalid Jalali date provided'
+                ], 422);
+            }
+        }
+    } else {
+        return response()->json([
+            'message' => 'Please provide departure dates or set all_days'
+        ], 422);
+    }
+
+    // Prepare price array
     $prices = [];
     if (in_array('VIP', $request->bus_type)) {
         $prices['VIP'] = $request->price_vip;
@@ -175,12 +211,13 @@ if (preg_match('/(AM|PM)$/i', $departureTime)) {
         $prices['580'] = $request->price_580;
     }
 
+    // Create trip
     $trip = Trip::create([
-        'company_id' => $company['id'],
+       
         'from' => $request->from,
         'to' => $request->to,
         'departure_time' => $departureTime,
-        'departure_date' => $departureDate, // null if all_days = true
+        'departure_dates_range' => $departureDates, // <-- new field for range
         'departure_terminal' => $request->departure_terminal,
         'arrival_terminal' => $request->arrival_terminal,
         'bus_type' => $request->bus_type,

@@ -44,7 +44,7 @@ Route::middleware('company.auth')->group(function () {
 
        // Trip routes
    
-    Route::post('/trips', [TripController::class, 'store']);
+
     Route::put('/trips/{id}', [TripController::class, 'update']);
     Route::delete('/trips/{id}', [TripController::class, 'destroy']);
 
@@ -164,3 +164,10 @@ Route::post('tickets/bulk-processing', [TicketController::class, 'bulkMarkAsProc
 
 
 Route::post('/tickets/{ticketId}/mark-payment-inprocessing', [TicketController::class, 'markPaymentAsProcessing']);
+
+use App\Http\Controllers\ChalanController;
+
+Route::post('/chalans', [ChalanController::class, 'create']); // create chalan
+Route::get('/chalans', [ChalanController::class, 'index']);   // list all
+Route::get('/chalans/{id}', [ChalanController::class, 'show']); // show single
+    Route::post('/trips', [TripController::class, 'store']);
