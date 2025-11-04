@@ -14,5 +14,6 @@ class Driver extends Model
         'father_name',
         'phone',
         'license_number',
+           'bus_number_plate',
     ];
 }

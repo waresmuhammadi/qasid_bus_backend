@@ -169,5 +169,20 @@ use App\Http\Controllers\ChalanController;
 
 Route::post('/chalans', [ChalanController::class, 'create']); // create chalan
 Route::get('/chalans', [ChalanController::class, 'index']);   // list all
-Route::get('/chalans/{id}', [ChalanController::class, 'show']); // show single
+Route::get('/chalans/{id}', [ChalanController::class, 'show']);
+Route::put('/chalans/{id}', [ChalanController::class, 'update']);
+
+
+Route::delete('/chalans/{id}', [ChalanController::class, 'destroy']);
+
+
+
+
+
     Route::post('/trips', [TripController::class, 'store']);
+
+    Route::get('/tickets', [TicketController::class, 'index']);
+Route::post('/tickets', [TicketController::class, 'store']);
+Route::get('/tickets/{id}', [TicketController::class, 'show']);
+Route::put('/tickets/{id}', [TicketController::class, 'update']);
+Route::delete('/tickets/{id}', [TicketController::class, 'destroy']);

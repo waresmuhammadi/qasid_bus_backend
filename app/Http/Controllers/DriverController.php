@@ -34,6 +34,7 @@ class DriverController extends Controller
             'father_name' => 'required|string', // ✅ corrected
             'phone' => 'nullable|string',
             'license_number' => 'required|string|unique:drivers,license_number',
+            'bus_number_plate' => 'nullable|string',
         ]);
 
         $driver = Driver::create($request->all());
@@ -41,24 +42,27 @@ class DriverController extends Controller
     }
 
     // Update a driver
-    public function updateDriver(Request $request, $id)
-    {
-        $driver = Driver::find($id);
+   // Update a driver
+public function updateDriver(Request $request, $id)
+{
+    $driver = Driver::find($id);
 
-        if (!$driver) {
-            return response()->json(['message' => 'Driver not found'], 404);
-        }
-
-        $request->validate([
-            'name' => 'required|string',
-            'father_name' => 'required|string', // ✅ corrected
-            'phone' => 'nullable|string',
-            'license_number' => 'required|string|unique:drivers,license_number,' . $driver->id,
-        ]);
-
-        $driver->update($request->all());
-        return response()->json($driver);
+    if (!$driver) {
+        return response()->json(['message' => 'Driver not found'], 404);
     }
+
+    $request->validate([
+        'name' => 'required|string',
+        'father_name' => 'required|string',
+        'phone' => 'nullable|string',
+        'license_number' => 'required|string|unique:drivers,license_number,' . $driver->id,
+        'bus_number_plate' => 'nullable|string', // ✅ added this line
+    ]);
+
+    $driver->update($request->all());
+    return response()->json($driver);
+}
+
 
     // Delete a driver
     public function deleteDriver($id)

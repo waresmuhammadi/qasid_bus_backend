@@ -53,4 +53,13 @@ public function driver()
 
 
 
+
+public function chalan()
+{
+    return $this->belongsTo(Chalan::class, 'chalan_id');
+}
+
+
+
+
 }

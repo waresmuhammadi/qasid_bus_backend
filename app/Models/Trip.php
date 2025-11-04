@@ -21,13 +21,15 @@ class Trip extends Model
         'bus_type',
          'all_days',
          'actual_departure_date',
-         'chalan_number'
+         'chalan_number',
+          'departure_dates_range',
     ];
     
     protected $casts = [
     'bus_type' => 'array',  // ✅ ensures PHP array <-> JSON storage
       'prices' => 'array',
       'ratings' => 'array',
+      'departure_dates_range' => 'array',
      
 
 
