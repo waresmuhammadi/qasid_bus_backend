@@ -165,22 +165,25 @@ public function publicIndex(Request $request)
 public function store(Request $request)
 {
     $request->validate([
-        'from' => 'required|string|max:255',
-        'to' => 'required|string|max:255',
-        'departure_time' => 'required|string',
-        'departure_terminal' => 'required|string|max:255',
-        'arrival_terminal' => 'required|string|max:255',
-        'bus_type' => 'required|array',
-        'bus_type.*' => 'in:VIP,580',
-        'price_vip' => 'required_if:bus_type,VIP|numeric|min:0',
-        'price_580' => 'required_if:bus_type,580|numeric|min:0',
-        'all_days' => 'boolean',
-        'is_range' => 'boolean',
-        'departure_dates_jalali' => 'sometimes|array',
-        'departure_date_jalali.year' => 'required_if:is_range,false,all_days,false|integer',
-        'departure_date_jalali.month' => 'required_if:is_range,false,all_days,false|integer',
-        'departure_date_jalali.day' => 'required_if:is_range,false,all_days,false|integer',
-    ]);
+    'from' => 'required|string|max:255',
+    'to' => 'required|string|max:255',
+    'departure_time' => 'required|string',
+    'departure_terminal' => 'required|string|max:255',
+    'arrival_terminal' => 'required|string|max:255',
+    'bus_type' => 'required|array',
+    'bus_type.*' => 'in:VIP,580',
+    'price_vip' => 'required_if:bus_type,VIP|numeric|min:0',
+    'price_580' => 'required_if:bus_type,580|numeric|min:0',
+    'all_days' => 'boolean',
+    'is_range' => 'boolean',
+    'departure_dates_jalali' => 'sometimes|array',
+
+    // ✅ Only required if it is NOT a range and NOT all_days
+    'departure_date_jalali.year' => 'required_without_all:all_days,is_range|integer',
+    'departure_date_jalali.month' => 'required_without_all:all_days,is_range|integer',
+    'departure_date_jalali.day' => 'required_without_all:all_days,is_range|integer',
+]);
+
 
     $company = $request->get('company');
     $departureTime = $request->departure_time;
@@ -241,7 +244,7 @@ public function store(Request $request)
 
     // ✅ Create trip
     $trip = Trip::create([
-        'company_id' => $company['id'] ?? null,
+    
         'from' => $request->from,
         'to' => $request->to,
         'departure_time' => $departureTime,
