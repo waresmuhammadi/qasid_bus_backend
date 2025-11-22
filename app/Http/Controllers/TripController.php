@@ -13,8 +13,7 @@ class TripController extends Controller
         5 => 'اسد', 6 => 'سنبله', 7 => 'میزان', 8 => 'عقرب',
         9 => 'قوس', 10 => 'جدی', 11 => 'دلو', 12 => 'حوت',
     ];
-
- private function formatTrip($trip)
+private function formatTrip($trip)
 {
     // ✅ Handle multiple date ranges (array)
     if (is_array($trip->departure_dates_range) && count($trip->departure_dates_range) > 0) {
@@ -32,6 +31,22 @@ class TripController extends Controller
             return $datePair; // fallback
         });
     }
+    // In your formatTrip method, add this:
+if ($trip->is_range && $trip->departure_dates_range) {
+    $trip->departure_dates_jalali = collect($trip->departure_dates_range)->map(function ($datePair) {
+        if (is_array($datePair) && isset($datePair['jalali'])) {
+            $parts = explode('-', $datePair['jalali']);
+            if (count($parts) === 3) {
+                return [
+                    'year' => (int)$parts[0],
+                    'month' => (int)$parts[1], 
+                    'day' => (int)$parts[2]
+                ];
+            }
+        }
+        return null;
+    })->filter()->toArray();
+}
 
     // ✅ Handle single-day trip (for backward compatibility)
     elseif (!empty($trip->departure_date)) {
@@ -65,9 +80,22 @@ class TripController extends Controller
         $trip->formatted_bus_type = $trip->bus_type;
     }
 
-    return $trip;
+    // ✅ FIX: Format additional capacity without modifying the model directly
+    // Instead of setting properties, return an array or use a different approach
+    $formattedAdditionalCapacity = [];
+    if (is_array($trip->additional_capacity)) {
+        foreach ($trip->additional_capacity as $busType => $capacity) {
+            $formattedAdditionalCapacity[] = "$busType: +$capacity";
+        }
+    }
+    
+    // Add formatted properties as array elements (not model properties)
+    return array_merge($trip->toArray(), [
+        'formatted_additional_capacity' => !empty($formattedAdditionalCapacity) 
+            ? implode(', ', $formattedAdditionalCapacity) 
+            : 'None'
+    ]);
 }
-
 
 
     // Public trips with filtering
@@ -87,13 +115,32 @@ public function publicIndex(Request $request)
         $query->where('to', 'like', '%' . $request->query('to') . '%');
     }
 
-    if ($request->has('date')) {
-        $date = $request->query('date');
-        $query->where(function ($q) use ($date) {
-            $q->where('departure_date', $date)
-              ->orWhere('all_days', true);
-        });
-    }
+   if ($request->has('date')) {
+    $date = $request->query('date');
+    $isJalali = str_starts_with($date, '14');
+
+    $query->where(function ($q) use ($date, $isJalali) {
+        // For range trips (departure_dates_range)
+        if ($isJalali) {
+            $q->whereJsonContains('departure_dates_range', [['jalali' => $date]]);
+        } else {
+            $q->whereJsonContains('departure_dates_range', [['gregorian' => $date]]);
+        }
+
+        // For single-day trips (departure_date)
+        if ($isJalali) {
+            $q->orWhere('departure_date', $date);
+        } else {
+            // Convert Gregorian to Jalali for single-day trips if needed
+            // Or store both formats in departure_date
+            $q->orWhere('departure_date', $date);
+        }
+
+        // For all_days trips
+        $q->orWhere('all_days', true);
+    });
+}
+
 
     if ($request->has('bus_type')) {
         $busType = $request->query('bus_type');
@@ -165,25 +212,23 @@ public function publicIndex(Request $request)
 public function store(Request $request)
 {
     $request->validate([
-    'from' => 'required|string|max:255',
-    'to' => 'required|string|max:255',
-    'departure_time' => 'required|string',
-    'departure_terminal' => 'required|string|max:255',
-    'arrival_terminal' => 'required|string|max:255',
-    'bus_type' => 'required|array',
-    'bus_type.*' => 'in:VIP,580',
-    'price_vip' => 'required_if:bus_type,VIP|numeric|min:0',
-    'price_580' => 'required_if:bus_type,580|numeric|min:0',
-    'all_days' => 'boolean',
-    'is_range' => 'boolean',
-    'departure_dates_jalali' => 'sometimes|array',
-
-    // ✅ Only required if it is NOT a range and NOT all_days
-    'departure_date_jalali.year' => 'required_without_all:all_days,is_range|integer',
-    'departure_date_jalali.month' => 'required_without_all:all_days,is_range|integer',
-    'departure_date_jalali.day' => 'required_without_all:all_days,is_range|integer',
-]);
-
+        'from' => 'required|string|max:255',
+        'to' => 'required|string|max:255',
+        'departure_time' => 'required|string',
+        'departure_terminal' => 'required|string|max:255',
+        'arrival_terminal' => 'required|string|max:255',
+        'additional_capacity_vip' => 'nullable|integer|min:0|max:20',
+        'additional_capacity_580' => 'nullable|integer|min:0|max:20',
+        'bus_type' => 'required|array',
+        'bus_type.*' => 'in:VIP,580',
+        'price_vip' => 'required_if:bus_type,VIP|numeric|min:0',
+        'price_580' => 'required_if:bus_type,580|numeric|min:0',
+        'all_days' => 'boolean',
+        'departure_dates_jalali' => 'sometimes|array',
+        'departure_date_jalali.year' => 'required_without_all:all_days,departure_dates_jalali|integer',
+        'departure_date_jalali.month' => 'required_without_all:all_days,departure_dates_jalali|integer',
+        'departure_date_jalali.day' => 'required_without_all:all_days,departure_dates_jalali|integer',
+    ]);
 
     $company = $request->get('company');
     $departureTime = $request->departure_time;
@@ -194,13 +239,15 @@ public function store(Request $request)
 
     $departureDates = null;
     $departureDate = null;
+    $isRange = false;
 
-    // ✅ Handle range trips
-    if ($request->boolean('is_range')) {
-        if (!$request->has('departure_dates_jalali')) {
-            return response()->json(['message' => 'Departure date ranges are required for range trips'], 422);
-        }
+    // ✅ Automatically detect if multiple dates selected
+    if ($request->has('departure_dates_jalali') && is_array($request->departure_dates_jalali) && count($request->departure_dates_jalali) > 1) {
+        $isRange = true;
+    }
 
+    // ✅ Handle multiple-date (range) trips
+    if ($isRange) {
         $departureDates = [];
         $now = now()->setTimezone('Asia/Kabul')->format('Y-m-d');
 
@@ -220,18 +267,12 @@ public function store(Request $request)
             }
         }
     }
-
     // ✅ Handle all_days trips
     elseif ($request->boolean('all_days')) {
         $departureDates = null;
     }
-
     // ✅ Handle single-day trips
     else {
-        if (!$request->has('departure_date_jalali')) {
-            return response()->json(['message' => 'Departure date is required for single-day trips'], 422);
-        }
-
         $jalali = $request->departure_date_jalali;
         $jalalian = new \Morilog\Jalali\Jalalian($jalali['year'], $jalali['month'], $jalali['day']);
         $departureDate = $jalalian->format('Y-m-d');
@@ -241,6 +282,14 @@ public function store(Request $request)
     $prices = [];
     if (in_array('VIP', $request->bus_type)) $prices['VIP'] = $request->price_vip;
     if (in_array('580', $request->bus_type)) $prices['580'] = $request->price_580;
+    // ✅ Handle additional capacity as object
+    $additionalCapacity = [];
+    if (in_array('VIP', $request->bus_type) && $request->has('additional_capacity_vip')) {
+        $additionalCapacity['VIP'] = $request->additional_capacity_vip ?? 0;
+    }
+    if (in_array('580', $request->bus_type) && $request->has('additional_capacity_580')) {
+        $additionalCapacity['580'] = $request->additional_capacity_580 ?? 0;
+    }
 
     // ✅ Create trip
     $trip = Trip::create([
@@ -250,10 +299,11 @@ public function store(Request $request)
         'departure_time' => $departureTime,
         'departure_terminal' => $request->departure_terminal,
         'arrival_terminal' => $request->arrival_terminal,
+      'additional_capacity' => $additionalCapacity,
         'bus_type' => $request->bus_type,
         'prices' => $prices,
         'all_days' => $request->boolean('all_days', false),
-        'is_range' => $request->boolean('is_range', false),
+        'is_range' => $isRange,
         'departure_date' => $departureDate,
         'departure_dates_range' => $departureDates,
     ]);
@@ -270,60 +320,110 @@ public function store(Request $request)
 
 
     // Update a trip
-// Update a trip
+/// In TripController update method, update the validation and handling:
 public function update(Request $request, $id)
 {
-    $company = $request->get('company');
-    $trip = Trip::where('company_id', $company['id'])->find($id);
+    $trip = Trip::find($id);
 
     if (!$trip) {
         return response()->json(['message' => 'Trip not found'], 404);
     }
-$request->validate([
-    'from' => 'sometimes|required|string|max:255',
-    'to' => 'sometimes|required|string|max:255',
-    'departure_date_jalali.year' => 'sometimes|required|integer',
-    'departure_date_jalali.month' => 'sometimes|required|integer',
-    'departure_date_jalali.day' => 'sometimes|required|integer',
-    'departure_terminal' => 'sometimes|required|string|max:255',
-    'arrival_terminal' => 'sometimes|required|string|max:255',
-    'bus_type' => 'sometimes|required|array',
-    'bus_type.*' => 'in:VIP,580',
-    // ✅ FIX: Conditional validation - only require price if bus type is selected
-    'price_vip' => function ($attribute, $value, $fail) use ($request) {
-        if (in_array('VIP', $request->bus_type ?? []) && (is_null($value) || $value === '')) {
-            $fail('The VIP price is required when VIP bus type is selected.');
-        }
-    },
-    'price_580' => function ($attribute, $value, $fail) use ($request) {
-        if (in_array('580', $request->bus_type ?? []) && (is_null($value) || $value === '')) {
-            $fail('The 580 price is required when 580 bus type is selected.');
-        }
-    },
-    'all_days' => 'boolean',
-]);
+
+    $request->validate([
+        'from' => 'sometimes|required|string|max:255',
+        'to' => 'sometimes|required|string|max:255',
+        'departure_date_jalali.year' => 'sometimes|required|integer',
+        'departure_dates_jalali' => 'sometimes|array',
+        'departure_dates_jalali.*.year' => 'sometimes|required|integer',
+        'departure_dates_jalali.*.month' => 'sometimes|required|integer',
+        'departure_dates_jalali.*.day' => 'sometimes|required|integer',
+        'additional_capacity_vip' => 'sometimes|integer|min:0|max:20',
+        'additional_capacity_580' => 'sometimes|integer|min:0|max:20',
+        'departure_date_jalali.month' => 'sometimes|required|integer',
+        'departure_date_jalali.day' => 'sometimes|required|integer',
+        'departure_terminal' => 'sometimes|required|string|max:255',
+        'arrival_terminal' => 'sometimes|required|string|max:255',
+        'bus_type' => 'sometimes|required|array',
+        'bus_type.*' => 'in:VIP,580',
+        'price_vip' => function ($attribute, $value, $fail) use ($request) {
+            if (in_array('VIP', $request->bus_type ?? []) && (is_null($value) || $value === '')) {
+                $fail('The VIP price is required when VIP bus type is selected.');
+            }
+        },
+        'price_580' => function ($attribute, $value, $fail) use ($request) {
+            if (in_array('580', $request->bus_type ?? []) && (is_null($value) || $value === '')) {
+                $fail('The 580 price is required when 580 bus type is selected.');
+            }
+        },
+        'all_days' => 'boolean',
+    ]);
 
     $data = $request->all();
 
-    // Handle departure date
-    if ($request->boolean('all_days')) {
-        $data['departure_date'] = null;
-    } else {
-        if ($request->has('departure_date_jalali') && $request->departure_date_jalali) {
-            $jalali = $request->departure_date_jalali;
+    // ✅ FIX: Handle date type changes (all_days, single date, or range)
+    $isRange = false;
+    $departureDates = null;
+    $departureDate = null;
 
-            // Decode if string
-            if (is_string($jalali)) {
-                $jalali = json_decode($jalali, true);
+    // Handle multiple-date (range) trips
+    if ($request->has('departure_dates_jalali') && is_array($request->departure_dates_jalali) && count($request->departure_dates_jalali) > 0) {
+        $isRange = true;
+        $departureDates = [];
+        $now = now()->setTimezone('Asia/Kabul')->format('Y-m-d');
+
+        foreach ($request->departure_dates_jalali as $jalali) {
+            try {
+                // Decode if string
+                if (is_string($jalali)) {
+                    $jalali = json_decode($jalali, true);
+                }
+
+                $jalalian = new \Morilog\Jalali\Jalalian($jalali['year'], $jalali['month'], $jalali['day']);
+                $gregorianDate = $jalalian->toCarbon()->format('Y-m-d');
+                
+                if ($gregorianDate < $now) {
+                    return response()->json(['message' => 'Past dates not allowed'], 422);
+                }
+                
+                $departureDates[] = [
+                    'jalali' => $jalalian->format('Y-m-d'),
+                    'gregorian' => $gregorianDate,
+                ];
+            } catch (\Exception $e) {
+                return response()->json(['message' => 'Invalid Jalali date in range'], 422);
             }
+        }
+        
+        $data['departure_dates_range'] = $departureDates;
+        $data['departure_date'] = null;
+        $data['is_range'] = true;
+        $data['all_days'] = false;
+    }
+    // Handle all_days trips
+    elseif ($request->boolean('all_days')) {
+        $data['departure_dates_range'] = null;
+        $data['departure_date'] = null;
+        $data['is_range'] = false;
+        $data['all_days'] = true;
+    }
+    // Handle single-day trips
+    else if ($request->has('departure_date_jalali') && $request->departure_date_jalali) {
+        $jalali = $request->departure_date_jalali;
 
-            if (is_array($jalali)) {
-                $data['departure_date'] = sprintf(
-                    "%04d-%02d-%02d",
-                    $jalali['year'],
-                    $jalali['month'],
-                    $jalali['day']
-                );
+        // Decode if string
+        if (is_string($jalali)) {
+            $jalali = json_decode($jalali, true);
+        }
+
+        if (is_array($jalali)) {
+            try {
+                $jalalian = new \Morilog\Jalali\Jalalian($jalali['year'], $jalali['month'], $jalali['day']);
+                $data['departure_date'] = $jalalian->format('Y-m-d');
+                $data['departure_dates_range'] = null;
+                $data['is_range'] = false;
+                $data['all_days'] = false;
+            } catch (\Exception $e) {
+                return response()->json(['message' => 'Invalid Jalali date'], 422);
             }
         }
     }
@@ -387,6 +487,24 @@ $request->validate([
         $data['prices'] = $prices;
     }
 
+    // ✅ Handle additional capacity as object
+    if ($request->has('bus_type')) {
+        $additionalCapacity = [];
+        
+        // Update VIP capacity if VIP is in bus types
+        if (in_array('VIP', $request->bus_type) && $request->has('additional_capacity_vip')) {
+            $additionalCapacity['VIP'] = $request->additional_capacity_vip ?? 0;
+        }
+        
+        // Update 580 capacity if 580 is in bus types
+        if (in_array('580', $request->bus_type) && $request->has('additional_capacity_580')) {
+            $additionalCapacity['580'] = $request->additional_capacity_580 ?? 0;
+        }
+        
+        // Set the updated additional capacity
+        $data['additional_capacity'] = $additionalCapacity;
+    }
+
     // Update trip
     $trip->update($data);
 
@@ -403,7 +521,6 @@ $request->validate([
         'trip' => $trip
     ]);
 }
-
     // List trips for logged-in company
     public function index(Request $request)
     {
@@ -428,16 +545,19 @@ $request->validate([
     }
 
     // Delete trip
-    public function destroy(Request $request, $id)
-    {
-        $company = $request->get('company');
-        $trip = Trip::where('company_id', $company['id'])->find($id);
+    public function destroy($id)
+{
+    $trip = Trip::find($id);
 
-        if (!$trip) return response()->json(['message' => 'Trip not found'], 404);
-
-        $trip->delete();
-        return response()->json(['message' => 'Trip deleted successfully']);
+    if (!$trip) {
+        return response()->json(['message' => 'Trip not found'], 404);
     }
+
+    $trip->delete();
+
+    return response()->json(['message' => 'Trip deleted successfully']);
+}
+
 
 
 

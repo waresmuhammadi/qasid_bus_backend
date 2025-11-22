@@ -7,6 +7,7 @@ use App\Http\Controllers\authController;
 use App\Http\Controllers\BusController;
 use App\Http\Controllers\CouponController;
 use App\Http\Controllers\TicketController;
+use App\Http\Controllers\cleanerController;
 
 Route::get('/user', function (Request $request) {
     return $request->user();
@@ -40,6 +41,13 @@ Route::middleware('company.auth')->group(function () {
     Route::post('/buses', [BusController::class, 'store']);
     Route::put('/buses/{id}', [BusController::class, 'update']);
     Route::delete('/buses/{id}', [BusController::class, 'destroy']);
+
+
+
+Route::post('/cleaners', [CleanerController::class, 'createCleaner']);
+Route::get('/cleaners/{id}', [CleanerController::class, 'getCleanerById']);
+Route::put('/cleaners/{id}', [CleanerController::class, 'updateCleaner']);
+Route::delete('/cleaners/{id}', [CleanerController::class, 'deleteCleaner']);
 
 
        // Trip routes
@@ -102,6 +110,7 @@ Route::get('/trips/{tripId}/seats', [TicketController::class, 'availableSeats'])
 Route::post('/trips/{tripId}/book', [TicketController::class, 'book']);
 
 Route::get('/trips/{tripId}/tickets', [TicketController::class, 'tripTickets']);
+
 Route::get('/trips-with-tickets', [TicketController::class, 'allTripsWithTickets']);
 
 
@@ -186,3 +195,8 @@ Route::post('/tickets', [TicketController::class, 'store']);
 Route::get('/tickets/{id}', [TicketController::class, 'show']);
 Route::put('/tickets/{id}', [TicketController::class, 'update']);
 Route::delete('/tickets/{id}', [TicketController::class, 'destroy']);
+Route::get('/cleaners', [CleanerController::class, 'getCleaners']);
+
+
+
+Route::post('/tickets/{ticketId}/mark-unpaid', [TicketController::class, 'markPaymentAsUnpaid']);

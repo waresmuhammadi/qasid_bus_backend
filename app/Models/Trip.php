@@ -13,6 +13,7 @@ class Trip extends Model
         'company_id',
         'from',
         'to',
+        'additional_capacity',
         'departure_time',
         'departure_date',
         'departure_terminal',
@@ -20,6 +21,7 @@ class Trip extends Model
         'prices' ,
         'bus_type',
          'all_days',
+         'is_range',
          'actual_departure_date',
          'chalan_number',
           'departure_dates_range',
@@ -30,6 +32,8 @@ class Trip extends Model
       'prices' => 'array',
       'ratings' => 'array',
       'departure_dates_range' => 'array',
+      'is_range' => 'boolean',
+      'additional_capacity' => 'array'
      
 
 
