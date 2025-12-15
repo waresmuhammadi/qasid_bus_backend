@@ -101,7 +101,6 @@ public function publicIndex(Request $request)
     }
 
     $trips = $query->get();
-
     // --- CRITICAL FIX: Handle both Gregorian and Jalali dates ---
     $now = now()->setTimezone('Asia/Kabul');
     $currentTime = $now->format('H:i:s');
