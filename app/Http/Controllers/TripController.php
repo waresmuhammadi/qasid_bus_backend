@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use App\Models\Trip;
 use Morilog\Jalali\Jalalian;
+
+
 use App\Models\Rating;
 
 class TripController extends Controller
@@ -208,6 +210,135 @@ public function publicIndex(Request $request)
 
     return response()->json($trips);
 }
+
+
+
+
+
+public function Mobiletrips(Request $request)
+{
+    $query = Trip::query();
+
+    /* ---------------- FILTERS ---------------- */
+
+    if ($request->filled('company_id')) {
+        $query->where('company_id', $request->company_id);
+    }
+
+    if ($request->filled('from')) {
+        $query->where('from', 'LIKE', '%' . trim($request->from) . '%');
+    }
+
+    if ($request->filled('to')) {
+        $query->where('to', 'LIKE', '%' . trim($request->to) . '%');
+    }
+
+    /* ---------------- DATE FILTER (🔥 REAL FIX) ---------------- */
+
+    if ($request->filled('date')) {
+        $date = trim($request->date);
+
+        $query->where(function ($q) use ($date) {
+
+            // ✅ RANGE DATES (TEXT OR JSON SAFE)
+            $q->where('departure_dates_range', 'LIKE', '%' . $date . '%');
+
+            // ✅ SINGLE DATE
+            $q->orWhere('departure_date', $date);
+
+            // ✅ ALL DAYS
+            $q->orWhere('all_days', 1);
+        });
+    }
+
+    /* ---------------- BUS TYPE ---------------- */
+
+    if ($request->filled('bus_type')) {
+        $query->whereJsonContains('bus_type', $request->bus_type);
+    }
+
+    $trips = $query->get();
+
+    /* ---------------- TIME FILTER ---------------- */
+
+    $now = now()->setTimezone('Asia/Kabul');
+    $currentTime = $now->format('H:i:s');
+    $requestedDate = $request->date;
+
+    $trips = $trips->filter(function ($trip) use ($now, $currentTime, $requestedDate) {
+
+        if (!$requestedDate) {
+            return true;
+        }
+
+        $isToday = false;
+
+        // Jalali requested date
+        if (preg_match('/^(13|14)\d{2}-\d{1,2}-\d{1,2}$/', $requestedDate)) {
+            try {
+                [$y, $m, $d] = explode('-', $requestedDate);
+                $gregorian = (new Jalalian($y, $m, $d))->toCarbon()->format('Y-m-d');
+                $isToday = ($gregorian === $now->format('Y-m-d'));
+            } catch (\Exception $e) {
+                return true;
+            }
+        } else {
+            $isToday = ($requestedDate === $now->format('Y-m-d'));
+        }
+
+        if ($isToday) {
+            return $trip->departure_time > $currentTime;
+        }
+
+        return true;
+    })->values();
+
+    /* ---------------- FORMAT ---------------- */
+
+    $trips = $trips->map(fn ($trip) => $this->formatTrip($trip));
+
+   return response()->json([
+    'trips' => $trips
+]);
+
+}
+
+
+
+
+
+
+public function tripLocations()
+{
+    $froms = Trip::whereNotNull('from')
+        ->distinct()
+        ->pluck('from')
+        ->values();
+
+    $tos = Trip::whereNotNull('to')
+        ->distinct()
+        ->pluck('to')
+        ->values();
+
+    return response()->json([
+        'from' => $froms,
+        'to'   => $tos,
+    ]);
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     // Store a new trip
 public function store(Request $request)
 {

@@ -9,5 +9,14 @@ Route::get('/', function () {
 
 use App\Http\Controllers\TicketController;
 
-Route::get('/done/{ticketId}', [TicketController::class, 'paymentSuccess']);
 Route::get('/payment/failure/{ticketId}', [TicketController::class, 'paymentFailure']);
+use Illuminate\Support\Facades\Mail;
+
+Route::get('/test-mail', function () {
+    Mail::raw('Hello from Wardak Baba Travels 🚍', function ($message) {
+        $message->to('muhammadhares11@gmail.com')
+                ->subject('SMTP Test Email');
+    });
+
+    return 'Email sent!';
+});

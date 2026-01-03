@@ -16,6 +16,8 @@ class Ticket extends Model
       'seat_number',
     'bus_type',
          'cleaner_id',
+         'from_website',
+        
     'name',
    'bus_number_plate', // Add this
     'father_name',

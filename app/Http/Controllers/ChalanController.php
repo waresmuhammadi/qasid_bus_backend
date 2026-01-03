@@ -12,18 +12,14 @@ class ChalanController extends Controller
     public function create(Request $request)
     {
         $request->validate([
+            'chalan_number' => 'required|string|max:50', // USER MUST ENTER IT
             'ticket_ids'   => 'required|array|max:50',
             'ticket_ids.*' => 'exists:tickets,id',
         ]);
 
-        // Generate a unique 5-digit chalan number
-        do {
-            $chalanNumber = random_int(10000, 99999);
-        } while (Chalan::where('chalan_number', $chalanNumber)->exists());
-
-        // Create the chalan
+        // Create the chalan (NO UNIQUE / NO RANDOM ANYMORE)
         $chalan = Chalan::create([
-            'chalan_number' => $chalanNumber,
+            'chalan_number' => $request->chalan_number,
             'ticket_ids'    => $request->ticket_ids,
         ]);
 
@@ -37,7 +33,7 @@ class ChalanController extends Controller
         ], 201);
     }
 
-    // UPDATE a chalan (add/remove tickets)
+    // UPDATE a chalan (user can also update chalan_number if needed)
     public function update(Request $request, $id)
     {
         $chalan = Chalan::find($id);
@@ -46,29 +42,33 @@ class ChalanController extends Controller
         }
 
         $request->validate([
-            'add_ticket_ids'    => 'array',
-            'add_ticket_ids.*'  => 'exists:tickets,id',
-            'remove_ticket_ids' => 'array',
-            'remove_ticket_ids.*' => 'exists:tickets,id',
+            'chalan_number'      => 'string|max:50', // user can update it
+            'add_ticket_ids'     => 'array',
+            'add_ticket_ids.*'   => 'exists:tickets,id',
+            'remove_ticket_ids'  => 'array',
+            'remove_ticket_ids.*'=> 'exists:tickets,id',
         ]);
+
+        if ($request->has('chalan_number')) {
+            $chalan->chalan_number = $request->chalan_number;
+        }
 
         $currentTickets = $chalan->ticket_ids ?? [];
 
-        // Add new tickets
         if ($request->has('add_ticket_ids')) {
             $currentTickets = array_unique(array_merge($currentTickets, $request->add_ticket_ids));
+
             Ticket::whereIn('id', $request->add_ticket_ids)
                   ->update(['chalan_id' => $chalan->id]);
         }
 
-        // Remove tickets
         if ($request->has('remove_ticket_ids')) {
             $currentTickets = array_diff($currentTickets, $request->remove_ticket_ids);
+
             Ticket::whereIn('id', $request->remove_ticket_ids)
                   ->update(['chalan_id' => null]);
         }
 
-        // Save updated ticket list
         $chalan->ticket_ids = array_values($currentTickets);
         $chalan->save();
 
@@ -78,7 +78,6 @@ class ChalanController extends Controller
         ], 200);
     }
 
-    // DELETE a chalan
     public function destroy($id)
     {
         $chalan = Chalan::find($id);
@@ -86,7 +85,6 @@ class ChalanController extends Controller
             return response()->json(['message' => 'Chalan not found'], 404);
         }
 
-        // Unlink tickets before deleting
         Ticket::whereIn('id', $chalan->ticket_ids ?? [])
               ->update(['chalan_id' => null]);
 
@@ -95,14 +93,11 @@ class ChalanController extends Controller
         return response()->json(['message' => 'Chalan deleted successfully'], 200);
     }
 
-    // LIST all chalans
     public function index()
     {
-        $chalans = Chalan::with('tickets')->get();
-        return response()->json($chalans, 200);
+        return response()->json(Chalan::with('tickets')->get(), 200);
     }
 
-    // SHOW single chalan with ticket details
     public function show($id)
     {
         $chalan = Chalan::with('tickets')->find($id);
