@@ -7,6 +7,8 @@ use App\Http\Controllers\authController;
 use App\Http\Controllers\BusController;
 use App\Http\Controllers\CouponController;
 use App\Http\Controllers\TicketController;
+use App\Http\Controllers\cleanerController;
+use App\Http\Controllers\PaymentAttemptController;
 
 Route::get('/user', function (Request $request) {
     return $request->user();
@@ -42,6 +44,13 @@ Route::middleware('company.auth')->group(function () {
     Route::delete('/buses/{id}', [BusController::class, 'destroy']);
 
 
+
+Route::post('/cleaners', [CleanerController::class, 'createCleaner']);
+Route::get('/cleaners/{id}', [CleanerController::class, 'getCleanerById']);
+Route::put('/cleaners/{id}', [CleanerController::class, 'updateCleaner']);
+Route::delete('/cleaners/{id}', [CleanerController::class, 'deleteCleaner']);
+
+
        // Trip routes
    
 
@@ -64,7 +73,9 @@ Route::prefix('coupons')->group(function () {
 });
      Route::get('/trips', [TripController::class, 'index']);
      Route::get('/public/trips', [TripController::class, 'publicIndex']);
+     Route::get('companies/search-trips', [TripController::class, 'Mobiletrips']);
 
+     Route::get('companies/dropdown-search', [TripController::class, 'tripLocations']);
 
 Route::get('/buses', [BusController::class, 'index']);
 
@@ -102,6 +113,7 @@ Route::get('/trips/{tripId}/seats', [TicketController::class, 'availableSeats'])
 Route::post('/trips/{tripId}/book', [TicketController::class, 'book']);
 
 Route::get('/trips/{tripId}/tickets', [TicketController::class, 'tripTickets']);
+
 Route::get('/trips-with-tickets', [TicketController::class, 'allTripsWithTickets']);
 
 
@@ -132,8 +144,7 @@ Route::get('/trips/{trip}/ratings-total', [RatingController::class, 'totalScore'
 
 
 // TO:
-Route::get('/done/{ticketId}', [TicketController::class, 'paymentSuccess']);
-
+Route::get('/payment/success', [TicketController::class, 'paymentSuccess']);
 
 
 
@@ -186,3 +197,17 @@ Route::post('/tickets', [TicketController::class, 'store']);
 Route::get('/tickets/{id}', [TicketController::class, 'show']);
 Route::put('/tickets/{id}', [TicketController::class, 'update']);
 Route::delete('/tickets/{id}', [TicketController::class, 'destroy']);
+Route::get('/cleaners', [CleanerController::class, 'getCleaners']);
+
+
+
+Route::post('/tickets/{ticketId}/mark-unpaid', [TicketController::class, 'markPaymentAsUnpaid']);
+
+
+Route::prefix('attempts')->group(function () {
+    Route::get('/', [PaymentAttemptController::class, 'index']);           // fetch all attempts
+    Route::get('/{ticket}', [PaymentAttemptController::class, 'show']);    // single attempt
+    Route::put('/{ticket}/mark-paid', [PaymentAttemptController::class, 'markPaid']);
+    Route::put('/{ticket}', [PaymentAttemptController::class, 'update']);
+    Route::delete('/{ticket}', [PaymentAttemptController::class, 'destroy']);
+});

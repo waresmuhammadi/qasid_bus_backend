@@ -21,11 +21,13 @@ class TicketBookedMail extends Mailable
         $this->trip = $trip;
     }
 
-    public function build()
-    {
-        return $this->subject('🎫 New Ticket Booking Received')
-            ->view('ticket_booked');
-    }
+   public function build()
+{
+    return $this
+        ->from('info@qasid.org', 'Qasid')
+        ->subject('🎫 بلیط شما با موفقیت ثبت شد')
+        ->view('emails.ticket_user');
+}
 }
 
 

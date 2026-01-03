@@ -15,13 +15,19 @@ class Ticket extends Model
     'seat_numbers',
       'seat_number',
     'bus_type',
+         'cleaner_id',
+         'from_website',
+        
     'name',
-    'last_name',
+   'bus_number_plate', // Add this
+    'father_name',
+     'province',
     // ✅ new field
      'email',  
      'address',
     'phone',
     'payment_method', // ✅ new field
+      'payment_status', // ✅ MAKE SURE THIS IS HERE
       'status',
         'from',
        'departure_date',
@@ -59,7 +65,10 @@ public function chalan()
     return $this->belongsTo(Chalan::class, 'chalan_id');
 }
 
-
+public function cleaner()
+    {
+        return $this->belongsTo(Cleaner::class);
+    }
 
 
 }

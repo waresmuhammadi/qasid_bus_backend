@@ -1,22 +1,24 @@
 <?php
 
 namespace App\Http\Controllers;
-
+use Illuminate\Support\Str;
 use Illuminate\Http\Request;
 use App\Models\Trip;
 use App\Models\Ticket;
 use App\Models\Coupon;
+use App\Models\TempBooking;
 
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
-
+use App\Models\PaymentAttempt;
 use Illuminate\Support\Facades\Mail;
 use App\Mail\TicketBookedMail;
 
 
+
 class TicketController extends Controller
 {
-  public function availableSeats(Request $request, $tripId)
+ public function availableSeats(Request $request, $tripId)
 {
     $request->validate([
         'bus_type'       => 'required|in:VIP,580',
@@ -30,27 +32,50 @@ class TicketController extends Controller
         return response()->json(['message' => 'Trip not found'], 404);
     }
 
+    // ✅ DEBUG: Check what bus types the trip actually has
+    \Log::info('Trip Debug:', [
+        'trip_id' => $tripId,
+        'requested_bus_type' => $busType,
+        'trip_bus_types' => $trip->bus_type,
+        'has_vip' => in_array('VIP', $trip->bus_type),
+        'trip_data' => $trip->toArray()
+    ]);
+
     // Check if the bus type exists for this trip
     if (!in_array($busType, $trip->bus_type)) {
-        return response()->json(['message' => 'This bus type is not available for this trip'], 400);
+        return response()->json([
+            'message' => 'This bus type is not available for this trip',
+            'available_bus_types' => $trip->bus_type,
+            'requested_bus_type' => $busType
+        ], 400);
     }
+    
 
     // Determine which date to check
     $departureDate = $trip->all_days
-        ? ($request->departure_date ?? now()->toDateString()) // must specify for all_day trips
+        ? ($request->departure_date ?? now()->toDateString())
         : $trip->departure_date;
 
-    // ✅ Now include departure_date in the booked seat filter
+    // Get booked seats
     $bookedSeats = Ticket::where('trip_id', $tripId)
         ->where('bus_type', $busType)
         ->where('departure_date', $departureDate)
         ->where('status', '!=', 'cancelled')
-        ->where('payment_status', '!=', 'failed')
+        ->where(function($query) {
+            $query->where('payment_status', 'paid')
+                  ->orWhere('payment_status', 'in_processing')
+                  ->orWhere('payment_status', 'unpaid');
+        })
         ->pluck('seat_numbers')
         ->flatten()
         ->toArray();
 
-    $seatRange = $this->getSeatRangeForBusType($trip->bus_type, $busType);
+    // ✅ USE ADDITIONAL CAPACITY
+    $seatRange = $this->getSeatRangeForBusType(
+        $trip->bus_type, 
+        $busType, 
+        $trip->additional_capacity
+    );
 
     if (!$seatRange) {
         return response()->json(['message' => 'Invalid bus type configuration'], 400);
@@ -73,17 +98,35 @@ class TicketController extends Controller
         'selected_bus_type' => $busType,
         'departure_date'    => $departureDate,
         'seats'             => $seats,
-        'total_capacity'    => $capacity,
+        'base_capacity'     => $seatRange['base_capacity'],
+        'additional_capacity' => $seatRange['additional_capacity'],
+        'total_capacity'    => $seatRange['total_capacity'],
+        'capacity_info'     => "Base: {$seatRange['base_capacity']} + Additional: {$seatRange['additional_capacity']} = Total: {$seatRange['total_capacity']}"
     ]);
 }
 
     // Helper method to get seat range for a specific bus type
-   private function getSeatRangeForBusType($tripBusTypes, $selectedBusType)
+// In TicketController availableSeats method, update the seat range calculation:
+private function getSeatRangeForBusType($tripBusTypes, $selectedBusType, $additionalCapacity = [])
 {
-    $capacity = ($selectedBusType === 'VIP') ? 36 : 51;
+    $baseCapacity = ($selectedBusType === 'VIP') ? 35 : 49;
+    
+    // Get additional capacity for the specific bus type
+    $additionalForBusType = $additionalCapacity[$selectedBusType] ?? 0;
+    $totalCapacity = $baseCapacity + $additionalForBusType;
 
-    return ['start' => 1, 'end' => $capacity];
+    return [
+        'start' => 1, 
+        'end' => $totalCapacity,
+        'base_capacity' => $baseCapacity,
+        'additional_capacity' => $additionalForBusType,
+        'total_capacity' => $totalCapacity
+    ];
 }
+
+
+// ------------------- BOOK METHOD -------------------
+
 
 public function book(Request $request, $tripId)
 {
@@ -91,215 +134,225 @@ public function book(Request $request, $tripId)
         'seat_numbers'   => 'required|array',
         'seat_numbers.*' => 'integer',
         'name'           => 'required|string|max:255',
-        'last_name'      => 'required|string|max:255',
         'phone'          => 'required|string|max:20',
         'payment_method' => 'required|in:hessabpay,doorpay',
         'bus_type'       => 'required|in:VIP,580',
         'email'          => 'required_if:payment_method,hessabpay|email',
         'address'        => 'required_if:payment_method,doorpay|string|max:500',
+        'province'       => 'nullable|string|max:255',
+        'father_name'    => 'nullable|string|max:255',
         'departure_date' => 'sometimes|date',
         'coupon_code'    => 'nullable|string|exists:coupons,code'
     ]);
 
-    $ticketNumber = $this->generateUniqueTicketNumber();
+    $trip = Trip::findOrFail($tripId);
 
-    $trip = Trip::find($tripId);
-    if (!$trip) {
-        return response()->json(['message' => 'Trip not found'], 404);
-    }
-
-    // Determine departure date
-    $departureDate = $trip->all_days
-        ? $request->departure_date
-        : $trip->departure_date;
-
+    $departureDate = $trip->all_days ? $request->departure_date : $trip->departure_date;
     if ($trip->all_days && !$departureDate) {
         return response()->json(['message' => 'Departure date is required'], 400);
     }
 
-    // Check for seat conflicts
-    $alreadyBooked = Ticket::where('trip_id', $tripId)
+    // Seat conflict check (paid or in_processing only)
+    $bookedSeats = Ticket::where('trip_id', $tripId)
         ->where('bus_type', $request->bus_type)
         ->where('departure_date', $departureDate)
-        ->where('status', '!=', 'cancelled')
-        ->where('payment_status', '!=', 'failed')
+        ->whereIn('payment_status', ['paid','in_processing'])
         ->pluck('seat_numbers')
         ->flatten()
         ->toArray();
 
-    $conflicts = array_intersect($alreadyBooked, $request->seat_numbers);
-    if (!empty($conflicts)) {
-        return response()->json([
-            'message'   => 'Some seats are already booked for this date and bus type',
-            'conflicts' => $conflicts
-        ], 409);
+    if (array_intersect($bookedSeats, $request->seat_numbers)) {
+        return response()->json(['message' => 'Seats already taken'], 409);
     }
 
-    // ✅ CLEAR PAYMENT STATUS LOGIC - ONLY 3 VALUES: paid, unpaid, in_processing
-    $paymentStatus = $request->payment_method === 'hessabpay' ? 'paid' : 'in_processing';
-
-    // Base price calculation
+    // Price calculation
     $basePrice = $trip->prices[$request->bus_type] ?? 0;
     $seatCount = count($request->seat_numbers);
 
-    // Handle coupon
-    $couponCode = $request->coupon_code;
-    $discountAmount = 0;
-    if ($couponCode) {
-        $coupon = \App\Models\Coupon::where('code', $couponCode)->first();
-        if ($coupon) {
-            $discountAmount = $coupon->amount;
+    $coupon = \App\Models\Coupon::where('code', $request->coupon_code)->first();
+    $discount = $coupon ? $coupon->amount : 0;
+
+    $finalPrice = max(($basePrice * $seatCount) - $discount, 0);
+
+    // Determine from_website
+    // Determine the origin / frontend URL
+$fromWebsite = $request->from_website ?? $request->header('Origin') ?? $request->header('Referer') ?? request()->getSchemeAndHttpHost();
+
+    // Auto-paid check
+    $paymentStatus = 'in_processing';
+    $autoPaidDomains = explode(',', env('AUTO_PAID_DOMAINS', ''));
+    foreach ($autoPaidDomains as $domain) {
+        if (!empty($domain) && str_contains($fromWebsite, trim($domain))) {
+            $paymentStatus = 'paid';
+            break;
         }
     }
 
-    $finalPrice = max(($basePrice * $seatCount) - $discountAmount, 0);
+    // ===== DOORPAY: immediate ticket creation =====
+    if ($request->payment_method === 'doorpay') {
+        $ticket = Ticket::create([
+            'trip_id'         => $tripId,
+            'ticket_number'   => $this->generateUniqueTicketNumber(),
+            'departure_date'  => $departureDate,
+            'seat_numbers'    => $request->seat_numbers,
+            'name'            => $request->name,
+            'phone'           => $request->phone,
+            'email'           => $request->email,
+            'address'         => $request->address ?? null,
+            'bus_type'        => $request->bus_type,
+            'payment_method'  => 'doorpay',
+            'payment_status'  => $paymentStatus,
+            'status'          => 'stopped',
+            'province'        => $request->province ?? null,
+            'father_name'     => $request->father_name ?? null,
+            'coupon_code'     => $request->coupon_code,
+            'discount_amount' => $discount,
+            'final_price'     => $finalPrice,
+            'from_website'    => $fromWebsite,
+        ]);
 
-    // ✅ Create ticket - REMOVE THE STATUS FIELD COMPLETELY
-    $ticket = Ticket::create([
+        try {
+            if (!empty($ticket->email)) {
+                Mail::to($ticket->email)->send(new TicketBookedMail($ticket, $trip));
+            }
+        } catch (\Throwable $e) {
+            \Log::error('DOORPAY EMAIL FAILED', [
+                'ticket_id' => $ticket->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        return response()->json([
+            'message' => $paymentStatus === 'paid' ? 'Tickets booked successfully - Payment automatically marked as PAID!' : 'Tickets booked successfully - Payment in processing',
+            'ticket' => $ticket,
+            'final_price' => $finalPrice,
+            'trip_details' => $trip,
+            'payment_status'=> $ticket->payment_status,
+        ], 201);
+    }
+
+    // ===== HESSABPAY: create attempt first =====
+    $attempt = PaymentAttempt::create([
         'trip_id'         => $tripId,
-        'ticket_number'   => $ticketNumber,
-        'departure_date'  => $departureDate,
         'seat_numbers'    => $request->seat_numbers,
         'name'            => $request->name,
-        'last_name'       => $request->last_name,
         'phone'           => $request->phone,
-        'email'           => $request->email ?? null,
-        'address'         => $request->address ?? null,
-        'payment_method'  => $request->payment_method,
-        'payment_status'  => $paymentStatus, // ✅ paid OR in_processing ONLY
+        'email'           => $request->email,
         'bus_type'        => $request->bus_type,
-        'coupon_code'     => $couponCode,
-        'discount_amount' => $discountAmount,
+        'departure_date'  => $departureDate,
+        'coupon_code'     => $request->coupon_code,
+        'discount_amount' => $discount,
         'final_price'     => $finalPrice,
-        // ✅ REMOVED: 'status' => 'booked' - Let the database use its default value
+        'status'          => 'pending',
+        'from_website'    => $fromWebsite,
     ]);
 
-    // Capture website info
-    $ticket->from_website = $request->from_website
-        ?? $request->header('Origin')
-        ?? $request->header('Referer')
-        ?? request()->getSchemeAndHttpHost();
-    $ticket->save();
+    // Create HessabPay session
+    $items = [[
+        'id' => 'attempt-' . $attempt->id,
+        'name' => "Bus Ticket",
+        'price' => $finalPrice,
+        'quantity' => 1,
+    ]];
 
-    // Send email
+    $response = Http::withHeaders([
+        'Authorization' => 'API-KEY ' . env('HESABPAY_API_KEY'),
+    ])->post(env('HESABPAY_BASE_URL') . '/payment/create-session', [
+        'email' => $attempt->email,
+        'items' => $items,
+        'currency' => 'AFN',
+        'redirect_success_url' => env('HESABPAY_SUCCESS_URL') . "?attempt_id={$attempt->id}",
+        'redirect_failure_url' => env('HESABPAY_FAILURE_URL') . "?attempt_id={$attempt->id}",
+    ]);
+
+    return response()->json([
+        'message' => 'Booking saved. Redirect to payment.',
+        'ticket_attempt_id' => $attempt->id,
+        'payment' => $response->json(),
+    ], 200);
+}
+
+public function paymentSuccess(Request $request)
+{
     try {
-        Mail::to('arianniy800@gmail.com')->send(new TicketBookedMail($ticket, $trip));
-    } catch (\Exception $e) {
-        \Log::error('Mail sending failed: ' . $e->getMessage());
-    }
+        $fullUrl = $request->fullUrl();
+        \Log::info('RAW URL FROM HESSABPAY: ' . $fullUrl);
 
-    // If HessabPay → create session
-    if ($request->payment_method === 'hessabpay') {
-        $items = [
-            [
-                'id'       => 'TKT-' . $ticket->id,
-                'name'     => "Bus Ticket - Trip #{$trip->id}",
-                'price'    => $ticket->final_price,
-                'quantity' => 1,
-            ]
-        ];
-
-        $response = Http::withHeaders([
-            'Authorization' => 'API-KEY ' . env('HESABPAY_API_KEY'),
-            'Accept'        => 'application/json',
-        ])->post(env('HESABPAY_BASE_URL') . '/payment/create-session', [
-            'email'               => $ticket->email,
-            'items'               => $items,
-            'currency'            => 'AFN',
-            'redirect_success_url'=> env('HESABPAY_SUCCESS_URL') . "/{$ticket->id}",
-            'redirect_failure_url'=> env('HESABPAY_FAILURE_URL') . "/{$ticket->id}",
-        ]);
-
-        if ($response->successful()) {
-            return response()->json([
-                'message' => 'Ticket created, redirect to payment',
-                'ticket'  => $ticket,
-                'payment' => $response->json()
-            ], 201);
-        } else {
-            \Log::error('HesabPay Create Session Error', [
-                'status' => $response->status(),
-                'body'   => $response->body(),
-            ]);
-
-            return response()->json([
-                'error'    => 'Payment session failed',
-                'ticket'   => $ticket,
-                'response' => $response->body()
-            ], 500);
+        if (!preg_match('/attempt_id=(\d+)/', $fullUrl, $m)) {
+            throw new \Exception('attempt_id not found');
         }
-    }
 
-    // Doorpay response
-    return response()->json([
-        'message'       => 'Tickets booked successfully - Payment in processing',
-        'ticket'        => $ticket,
-        'final_price'   => $ticket->final_price,
-        'trip_details'  => $trip,
-        'payment_status'=> $ticket->payment_status // This will be 'in_processing'
-    ], 201);
-}
+        $attemptId = $m[1];
+        $attempt = \App\Models\PaymentAttempt::findOrFail($attemptId);
 
+        if ($attempt->status === 'paid') {
+            return redirect(env('FRONTEND_URL') . '/done?ticket_id=' . $attempt->ticket_id);
+        }
 
-
-public function paymentSuccess(Request $request, $ticketId)
-{
-    $ticket = Ticket::find($ticketId);
-    if (!$ticket) {
-        return response()->json(['error' => 'Ticket not found'], 404);
-    }
-
-    // Decode HessabPay query data
-    $dataParam = $request->query('data');
-    $decoded = urldecode($dataParam);
-    $data = json_decode($decoded, true);
-
-    if (json_last_error() !== JSON_ERROR_NONE || !$data) {
-        return redirect(env('FRONTEND_URL') . '/payment-error?message=Invalid+data');
-    }
-
-    $transactionId = $data['transaction_id'] ?? null;
-    $success = $data['success'] ?? false;
-
-    if ($success && $transactionId) {
-        // ✅ Update ticket payment status
-        $ticket->update([
-            'payment_status' => 'paid',
-            'transaction_id' => $transactionId,
+        // Create ticket after successful payment
+        $ticket = Ticket::create([
+            'trip_id'         => $attempt->trip_id,
+            'ticket_number'   => $this->generateUniqueTicketNumber(),
+            'seat_numbers'    => $attempt->seat_numbers,
+            'name'            => $attempt->name,
+            'phone'           => $attempt->phone,
+            'email'           => $attempt->email,
+            'bus_type'        => $attempt->bus_type,
+            'departure_date'  => $attempt->departure_date,
+            'payment_method'  => 'hessabpay',
+            'payment_status'  => 'paid',
+            'status'          => 'stopped',
+            'final_price'     => $attempt->final_price,
+            'coupon_code'     => $attempt->coupon_code,
+            'discount_amount'=> $attempt->discount_amount,
+            'from_website'    => $attempt->from_website, // ✅ from_website preserved
         ]);
 
-        // ✅ Get the company API URL from the trip
+        $attempt->update([
+            'status' => 'paid',
+            'ticket_id' => $ticket->id
+        ]);
+
+        // Send email
         $trip = Trip::find($ticket->trip_id);
-        $companyApiUrl = $trip->company_api_url ?? env('APP_URL'); // Fallback to your main URL
+        if (!empty($ticket->email)) {
+            try {
+                Mail::to($ticket->email)->send(new TicketBookedMail($ticket, $trip));
+            } catch (\Throwable $mailError) {
+                \Log::error('EMAIL FAILED', [
+                    'ticket_id' => $ticket->id,
+                    'error' => $mailError->getMessage(),
+                ]);
+            }
+        }
 
-        // ✅ CRITICAL FIX: Include company_api_url in redirect
-        return redirect(
-            env('FRONTEND_URL') . 
-            "/done?" . 
-            "ticket_id={$ticketId}&" .
-            "transaction_id={$transactionId}&" .
-            "company_api_url=" . urlencode($companyApiUrl)
-        );
+        // Redirect frontend
+        $redirectUrl = env('FRONTEND_URL') . "/done" .
+            "?ticket_id=" . $ticket->id .
+            "&app_url=" . urlencode(env('APP_URL')) .
+            "&company_name=" . urlencode(env('COMPANY_NAME', 'وردک بابا')) .
+            "&company_phone=" . urlencode(env('COMPANY_PHONE', '07888888'));
+
+        return redirect($redirectUrl);
+
+    } catch (\Throwable $e) {
+        \Log::error('PAYMENT ERROR: ' . $e->getMessage());
+        return redirect(env('FRONTEND_URL') . '/payment-error');
     }
-
-    $ticket->update(['payment_status' => 'failed']);
-    return redirect(env('FRONTEND_URL') . "/payment-error?ticket_id={$ticketId}");
 }
 
 
-public function paymentFailure($ticketId)
-{
-    $ticket = Ticket::find($ticketId);
 
-    if ($ticket) {
-        $ticket->payment_status = 'failed';
-        $ticket->save();
+
+public function paymentFailure(Request $request)
+{
+    $attempt = PaymentAttempt::find($request->attempt_id);
+
+    if ($attempt) {
+        $attempt->update(['status' => 'failed']);
     }
 
-    return response()->json([
-        'message' => 'Payment failed',
-        'ticket'  => $ticket
-    ], 400);
+    return redirect(env('FRONTEND_URL') . '/payment-error');
 }
 
 
@@ -370,50 +423,84 @@ public function show($id)
         ]);
     }
 
-    public function assignBusAndDriver(Request $request, $ticketId)
-    {
-        $request->validate([
-            'bus_id'    => 'required|exists:buses,id',
-            'driver_id' => 'required|exists:drivers,id',
-        ]);
+public function assignBusAndDriver(Request $request, $ticketId)
+{
+    $request->validate([
+        'driver_id' => 'required|exists:drivers,id',
+        'cleaner_id' => 'nullable|exists:cleaners,id',
+    ]);
 
-        $ticket = Ticket::find($ticketId);
+    $ticket = Ticket::find($ticketId);
 
-        if (!$ticket) {
-            return response()->json(['message' => 'Trip not found'], 404);
-        }
-
-        $ticket->bus_id    = $request->bus_id;
-        $ticket->driver_id = $request->driver_id;
-        $ticket->save();
-
-        return response()->json([
-            'message' => 'Bus and driver assigned successfully to ticket!',
-            'ticket'  => $ticket->load(['bus', 'driver'])
-        ]);
+    if (!$ticket) {
+        return response()->json(['message' => 'Ticket not found'], 404);
     }
 
-    public function bulkAssignBusAndDriver(Request $request)
-    {
-        $request->validate([
-            'ticket_ids'   => 'required|array',
-            'ticket_ids.*' => 'exists:tickets,id',
-            'bus_id'       => 'required|exists:buses,id',
-            'driver_id'    => 'required|exists:drivers,id',
-        ]);
+    // Get driver to extract bus_number_plate
+    $driver = \App\Models\Driver::find($request->driver_id);
+    
+    // DEBUG: Log what we're about to update
+    \Log::info("Updating ticket {$ticketId} with driver: {$request->driver_id}, bus_plate: " . ($driver->bus_number_plate ?? 'null'));
+    
+    // Update the ticket - use direct assignment
+    $ticket->driver_id = $request->driver_id;
+    $ticket->bus_number_plate = $driver->bus_number_plate ?? null;
+    
+    // Add cleaner if provided
+    if ($request->has('cleaner_id') && $request->cleaner_id) {
+        $ticket->cleaner_id = $request->cleaner_id;
+    }
+    
+    $ticket->save(); // Use save() instead of update()
 
-        Ticket::whereIn('id', $request->ticket_ids)
-            ->update([
-                'bus_id'    => $request->bus_id,
-                'driver_id' => $request->driver_id,
-            ]);
+    // Reload the ticket with relationships
+    $ticket->load(['driver', 'cleaner']);
 
-        return response()->json([
-            'message' => 'Bus and driver assigned to selected tickets successfully!',
-        ]);
+    // DEBUG: Log the result
+    \Log::info("Ticket after update - driver_id: {$ticket->driver_id}, bus_plate: {$ticket->bus_number_plate}");
+
+    return response()->json([
+        'message' => 'Driver and bus number plate assigned successfully to ticket!',
+        'ticket'  => $ticket
+    ]);
+}
+
+public function bulkAssignBusAndDriver(Request $request)
+{
+    $request->validate([
+        'ticket_ids'   => 'required|array',
+        'ticket_ids.*' => 'exists:tickets,id',
+        'driver_id'    => 'required|exists:drivers,id',
+        'cleaner_id'   => 'nullable|exists:cleaners,id',
+    ]);
+
+    // Get driver to extract bus_number_plate
+    $driver = \App\Models\Driver::find($request->driver_id);
+    
+    $updateData = [
+        'driver_id' => $request->driver_id,
+        'bus_number_plate' => $driver->bus_number_plate ?? null,
+    ];
+
+    // Add cleaner if provided
+    if ($request->has('cleaner_id') && $request->cleaner_id) {
+        $updateData['cleaner_id'] = $request->cleaner_id;
     }
 
+    // DEBUG: Log bulk update
+    \Log::info("Bulk updating tickets: " . implode(', ', $request->ticket_ids));
+    \Log::info("Update data: ", $updateData);
 
+    $updatedCount = Ticket::whereIn('id', $request->ticket_ids)->update($updateData);
+
+    // DEBUG: Log result
+    \Log::info("Updated {$updatedCount} tickets");
+
+    return response()->json([
+        'message' => 'Driver and bus number plate assigned to selected tickets successfully!',
+        'updated_count' => $updatedCount
+    ]);
+}
 
 
 
@@ -602,7 +689,32 @@ public function markPaymentAsProcessing($ticketId)
 }
 
 
+// ✅ Mark a ticket payment as "unpaid"
+public function markPaymentAsUnpaid($ticketId)
+{
+    $ticket = Ticket::find($ticketId);
 
+    if (!$ticket) {
+        return response()->json(['message' => 'Ticket not found'], 404);
+    }
+
+    // Check if already unpaid
+    if ($ticket->payment_status === 'unpaid') {
+        return response()->json(['message' => 'Ticket payment is already unpaid'], 400);
+    }
+
+    // Update status
+    $ticket->payment_status = 'unpaid';
+    $ticket->save();
+
+    return response()->json([
+        'message' => 'Ticket payment marked as unpaid successfully',
+        'ticket'  => $ticket
+    ], 200);
+}
 
 
 }
+
+
+
