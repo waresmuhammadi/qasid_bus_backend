@@ -714,6 +714,237 @@ public function markPaymentAsUnpaid($ticketId)
 }
 
 
+
+
+public function cancelSeats(Request $request, $ticketId)
+{
+    $request->validate([
+        'seat_numbers' => 'required|array',
+        'seat_numbers.*' => 'integer|min:1',
+  
+    ]);
+
+    $ticket = Ticket::with('trip')->find($ticketId);
+
+    if (!$ticket) {
+        return response()->json(['message' => 'Ticket not found'], 404);
+    }
+
+    // Check if ticket is already cancelled
+    if ($ticket->status === 'cancelled') {
+        return response()->json(['message' => 'Ticket is already cancelled'], 400);
+    }
+
+    // Check if requested seats belong to this ticket
+    $ticketSeats = $ticket->seat_numbers;
+    $seatsToCancel = $request->seat_numbers;
+    
+    $invalidSeats = array_diff($seatsToCancel, $ticketSeats);
+    if (!empty($invalidSeats)) {
+        return response()->json([
+            'message' => 'Some seats do not belong to this ticket',
+            'invalid_seats' => array_values($invalidSeats),
+            'ticket_seats' => $ticketSeats
+        ], 400);
+    }
+
+    // Calculate remaining seats
+    $remainingSeats = array_diff($ticketSeats, $seatsToCancel);
+    
+    // If all seats are cancelled, cancel the whole ticket
+    if (empty($remainingSeats)) {
+        $ticket->status = 'cancelled';
+        $ticket->save();
+        
+        return response()->json([
+            'message' => 'All seats cancelled. Ticket marked as cancelled.',
+            'ticket' => $ticket
+        ]);
+    }
+
+    // Get trip to recalculate price
+    $trip = Trip::find($ticket->trip_id);
+    if (!$trip) {
+        return response()->json(['message' => 'Trip not found'], 404);
+    }
+
+    // Get original price per seat
+    $pricePerSeat = $trip->prices[$ticket->bus_type] ?? 0;
+    
+    // Calculate original price without discount for reference
+    $originalTotalPrice = $pricePerSeat * count($ticketSeats);
+    
+    // Calculate new price based on remaining seats
+    $newTotalPrice = $pricePerSeat * count($remainingSeats);
+    
+    // Calculate the discount percentage that was applied originally
+    $originalDiscount = $ticket->discount_amount ?? 0;
+    $discountPercentage = 0;
+    
+    if ($originalTotalPrice > 0) {
+        $discountPercentage = ($originalDiscount / $originalTotalPrice) * 100;
+    }
+    
+    // Apply the same discount percentage to new price
+    $newDiscount = ($newTotalPrice * $discountPercentage) / 100;
+    
+    // Calculate final price with discount
+    $newFinalPrice = max($newTotalPrice - $newDiscount, 0);
+    
+    // If partial_refund is provided, use that instead of automatic recalculation
+    if ($request->has('partial_refund') && $request->partial_refund > 0) {
+        $ticket->final_price = max($ticket->final_price - $request->partial_refund, 0);
+        $ticket->discount_amount = max($ticket->discount_amount - $request->partial_refund, 0);
+    } else {
+        // Auto-recalculate price based on remaining seats
+        $ticket->final_price = $newFinalPrice;
+        $ticket->discount_amount = $newDiscount;
+    }
+    
+    // Update ticket with remaining seats
+    $ticket->seat_numbers = array_values($remainingSeats);
+    
+    // Save the updated ticket
+    $ticket->save();
+
+    // Log the seat cancellation for tracking
+    \Log::info('Seats cancelled from ticket', [
+        'ticket_id' => $ticketId,
+        'cancelled_seats' => $seatsToCancel,
+        'remaining_seats' => $remainingSeats,
+        'original_seat_count' => count($ticketSeats),
+        'new_seat_count' => count($remainingSeats),
+        'price_per_seat' => $pricePerSeat,
+        'original_final_price' => $originalTotalPrice,
+        'new_final_price' => $ticket->final_price,
+        'trip_id' => $ticket->trip_id,
+        'bus_type' => $ticket->bus_type,
+        'departure_date' => $ticket->departure_date,
+    ]);
+
+    return response()->json([
+        'message' => 'Seats cancelled successfully. Seat numbers ' . implode(', ', $seatsToCancel) . ' are now free.',
+        'ticket' => $ticket->fresh(),
+        'cancelled_seats' => $seatsToCancel,
+        'remaining_seats' => $remainingSeats,
+        'seats_now_free' => $seatsToCancel,
+        'price_calculation' => [
+            'price_per_seat' => $pricePerSeat,
+            'original_seat_count' => count($ticketSeats),
+            'new_seat_count' => count($remainingSeats),
+            'original_final_price' => $originalTotalPrice,
+            'new_final_price' => $ticket->final_price,
+            'discount_applied' => $newDiscount,
+            'seats_cancelled_count' => count($seatsToCancel),
+            'price_difference' => $originalTotalPrice - $ticket->final_price
+        ]
+    ]);
+}
+
+/**
+ * Check if seats are free after cancellation (for verification)
+ */
+public function verifySeatsFree(Request $request)
+{
+    $request->validate([
+        'trip_id' => 'required|exists:trips,id',
+        'seat_numbers' => 'required|array',
+        'seat_numbers.*' => 'integer',
+        'bus_type' => 'required|in:VIP,580',
+        'departure_date' => 'required|date',
+    ]);
+
+    $trip = Trip::find($request->trip_id);
+    
+    if (!$trip) {
+        return response()->json(['message' => 'Trip not found'], 404);
+    }
+
+    // Check booked seats
+    $bookedSeats = Ticket::where('trip_id', $request->trip_id)
+        ->where('bus_type', $request->bus_type)
+        ->where('departure_date', $request->departure_date)
+        ->where('status', '!=', 'cancelled')
+        ->whereIn('payment_status', ['paid', 'in_processing'])
+        ->pluck('seat_numbers')
+        ->flatten()
+        ->toArray();
+
+    $requestedSeats = $request->seat_numbers;
+    $availableSeats = [];
+    $bookedSeatsList = [];
+
+    foreach ($requestedSeats as $seat) {
+        if (in_array($seat, $bookedSeats)) {
+            $bookedSeatsList[] = $seat;
+        } else {
+            $availableSeats[] = $seat;
+        }
+    }
+
+    return response()->json([
+        'trip_id' => $request->trip_id,
+        'departure_date' => $request->departure_date,
+        'bus_type' => $request->bus_type,
+        'requested_seats' => $requestedSeats,
+        'available_seats' => $availableSeats,
+        'booked_seats' => $bookedSeatsList,
+        'all_available' => empty($bookedSeatsList),
+        'message' => empty($bookedSeatsList) 
+            ? 'All requested seats are available' 
+            : 'Some seats are already booked'
+    ]);
+}
+// TripController.php - Add this method
+
+/**
+ * Update seat availability after cancellation
+ * This is called automatically when seats are cancelled
+ */
+public function updateSeatAvailability(Request $request, $tripId)
+{
+    $request->validate([
+        'seat_numbers' => 'required|array',
+        'seat_numbers.*' => 'integer',
+        'bus_type' => 'required|in:VIP,580',
+        'departure_date' => 'required|date',
+        'action' => 'required|in:free,book', // free seats after cancellation
+    ]);
+
+    $trip = Trip::find($tripId);
+    
+    if (!$trip) {
+        return response()->json(['message' => 'Trip not found'], 404);
+    }
+
+    // Get current booked seats
+    $bookedSeats = Ticket::where('trip_id', $tripId)
+        ->where('bus_type', $request->bus_type)
+        ->where('departure_date', $request->departure_date)
+        ->where('status', '!=', 'cancelled')
+        ->whereIn('payment_status', ['paid', 'in_processing'])
+        ->pluck('seat_numbers')
+        ->flatten()
+        ->toArray();
+
+    $updatedSeats = [];
+    
+    if ($request->action === 'free') {
+        // Remove seats from booked list (they were cancelled)
+        $updatedSeats = array_diff($bookedSeats, $request->seat_numbers);
+        
+        return response()->json([
+            'message' => 'Seats freed successfully',
+            'freed_seats' => $request->seat_numbers,
+            'previously_booked' => $bookedSeats,
+            'now_booked' => array_values($updatedSeats),
+            'seats_now_available' => $request->seat_numbers
+        ]);
+    }
+
+    return response()->json(['message' => 'Action completed']);
+}
+
 }
 
 

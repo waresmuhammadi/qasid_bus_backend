@@ -211,3 +211,5 @@ Route::prefix('attempts')->group(function () {
     Route::put('/{ticket}', [PaymentAttemptController::class, 'update']);
     Route::delete('/{ticket}', [PaymentAttemptController::class, 'destroy']);
 });
+
+Route::post('/tickets/{ticketId}/cancel-seats', [TicketController::class, 'cancelSeats']);
