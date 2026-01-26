@@ -18,45 +18,33 @@ use App\Mail\TicketBookedMail;
 
 class TicketController extends Controller
 {
- public function availableSeats(Request $request, $tripId)
+public function availableSeats(Request $request, $tripId)
 {
     $request->validate([
         'bus_type'       => 'required|in:VIP,580',
-        'departure_date' => 'nullable|date'
+        'departure_date' => 'required|date' // Make this required
     ]);
 
     $busType = $request->bus_type;
+    $departureDate = $request->departure_date;
     $trip = Trip::find($tripId);
 
     if (!$trip) {
         return response()->json(['message' => 'Trip not found'], 404);
     }
 
-    // ✅ DEBUG: Check what bus types the trip actually has
-    \Log::info('Trip Debug:', [
-        'trip_id' => $tripId,
-        'requested_bus_type' => $busType,
-        'trip_bus_types' => $trip->bus_type,
-        'has_vip' => in_array('VIP', $trip->bus_type),
-        'trip_data' => $trip->toArray()
-    ]);
-
-    // Check if the bus type exists for this trip
-    if (!in_array($busType, $trip->bus_type)) {
+    // Fix: Convert bus_type to array if it's stored as JSON string
+    $tripBusTypes = is_array($trip->bus_type) ? $trip->bus_type : json_decode($trip->bus_type, true) ?? [];
+    
+    if (!in_array($busType, $tripBusTypes)) {
         return response()->json([
             'message' => 'This bus type is not available for this trip',
-            'available_bus_types' => $trip->bus_type,
+            'available_bus_types' => $tripBusTypes,
             'requested_bus_type' => $busType
         ], 400);
     }
-    
 
-    // Determine which date to check
-    $departureDate = $trip->all_days
-        ? ($request->departure_date ?? now()->toDateString())
-        : $trip->departure_date;
-
-    // Get booked seats
+    // Get booked seats FOR THIS SPECIFIC DATE
     $bookedSeats = Ticket::where('trip_id', $tripId)
         ->where('bus_type', $busType)
         ->where('departure_date', $departureDate)
@@ -72,7 +60,7 @@ class TicketController extends Controller
 
     // ✅ USE ADDITIONAL CAPACITY
     $seatRange = $this->getSeatRangeForBusType(
-        $trip->bus_type, 
+        $tripBusTypes,
         $busType, 
         $trip->additional_capacity
     );
@@ -83,13 +71,88 @@ class TicketController extends Controller
 
     $startSeat = $seatRange['start'];
     $endSeat   = $seatRange['end'];
-    $capacity  = $endSeat - $startSeat + 1;
+
+    // Get locked seats fields
+    $lockedSeatsField = "locked_seats_{$busType}";
+    $lockedByField = "locked_by_{$busType}";
+    
+    // Get existing locked seats
+$lockedSeats = $this->safeJsonDecode($trip->$lockedSeatsField);
+$lockedBy = $this->safeJsonDecode($trip->$lockedByField);
+    
+    // Get seats locked for this specific date
+    $lockedSeatsForDate = [];
+    $lockedByForDate = [];
+    
+    if (!empty($lockedSeats)) {
+        // Check if it's an indexed array (old format) or associative array (new format)
+        if (array_keys($lockedSeats) === range(0, count($lockedSeats) - 1)) {
+            // OLD FORMAT: [2, 3, 5, 6, 9, 11, 17, 18, 33, 34] - indexed array
+            // In old format, seats are locked for ALL dates
+            foreach ($lockedSeats as $seat) {
+                $lockedSeatsForDate[] = (int)$seat;
+                $lockedByForDate[$seat] = $lockedBy[$seat] ?? null;
+            }
+        } else {
+            // NEW FORMAT: {"23": {"dates": ["1404-11-8"]}} - associative array
+            foreach ($lockedSeats as $seat => $lockInfo) {
+                if (is_array($lockInfo) && isset($lockInfo['dates'])) {
+                    // SIMPLIFIED FIX: Compare dates without normalization
+                    // Just check if the date exists in any format
+                    $dates = $lockInfo['dates'];
+                    
+                    // Check if requested date matches any stored date (with or without leading zeros)
+                    $dateMatches = false;
+                    foreach ($dates as $storedDate) {
+                        // Try to normalize both dates for comparison
+                        $normalizedStoredDate = $this->normalizeDate($storedDate);
+                        $normalizedRequestedDate = $this->normalizeDate($departureDate);
+                        
+                        if ($normalizedStoredDate === $normalizedRequestedDate) {
+                            $dateMatches = true;
+                            break;
+                        }
+                        
+                        // Also check direct match (just in case)
+                        if ($storedDate === $departureDate) {
+                            $dateMatches = true;
+                            break;
+                        }
+                    }
+                    
+                    if ($dateMatches) {
+                        $lockedSeatsForDate[] = (int)$seat;
+                        $lockedByForDate[$seat] = $lockedBy[$seat] ?? null;
+                    }
+                } elseif (is_numeric($seat) && !empty($lockedBy[$seat])) {
+                    // Transitional format: seat number as key but no dates array
+                    // Assume locked for all dates for backward compatibility
+                    $lockedSeatsForDate[] = (int)$seat;
+                    $lockedByForDate[$seat] = $lockedBy[$seat];
+                }
+            }
+        }
+    }
 
     $seats = [];
     for ($i = $startSeat; $i <= $endSeat; $i++) {
+        $status = 'free';
+        $isLocked = false;
+        $isLockedBy = null;
+
+        if (in_array($i, $bookedSeats)) {
+            $status = 'booked';
+        } elseif (in_array($i, $lockedSeatsForDate)) {
+            $status = 'locked';
+            $isLocked = true;
+            $isLockedBy = $lockedByForDate[(string)$i] ?? null;
+        }
+
         $seats[] = [
             'seat_number' => $i,
-            'status'      => in_array($i, $bookedSeats) ? 'booked' : 'free'
+            'status'      => $status,
+            'is_locked'   => $isLocked,
+            'is_locked_by'=> $isLockedBy
         ];
     }
 
@@ -105,10 +168,26 @@ class TicketController extends Controller
     ]);
 }
 
-    // Helper method to get seat range for a specific bus type
+// Add this helper method to TicketController:
+private function normalizeDate($date)
+{
+    $parts = explode('-', $date);
+    if (count($parts) === 3) {
+        $year = $parts[0];
+        $month = str_pad($parts[1], 2, '0', STR_PAD_LEFT);
+        $day = str_pad($parts[2], 2, '0', STR_PAD_LEFT);
+        return "$year-$month-$day";
+    }
+    return $date;
+} // Helper method to get seat range for a specific bus type
 // In TicketController availableSeats method, update the seat range calculation:
 private function getSeatRangeForBusType($tripBusTypes, $selectedBusType, $additionalCapacity = [])
 {
+    // Make sure additional_capacity is an array
+    if (is_string($additionalCapacity)) {
+        $additionalCapacity = json_decode($additionalCapacity, true) ?? [];
+    }
+    
     $baseCapacity = ($selectedBusType === 'VIP') ? 35 : 49;
     
     // Get additional capacity for the specific bus type
@@ -124,9 +203,29 @@ private function getSeatRangeForBusType($tripBusTypes, $selectedBusType, $additi
     ];
 }
 
-
 // ------------------- BOOK METHOD -------------------
-
+// Add this method to TicketController.php
+private function safeJsonDecode($data)
+{
+    if (is_array($data)) {
+        return $data;
+    }
+    
+    if (is_string($data)) {
+        // Try to decode
+        $decoded = json_decode($data, true);
+        
+        // If decoding fails, try removing backslashes
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            $data = stripslashes($data);
+            $decoded = json_decode($data, true);
+        }
+        
+        return $decoded ?? [];
+    }
+    
+    return [];
+}
 
 public function book(Request $request, $tripId)
 {

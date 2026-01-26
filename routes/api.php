@@ -51,6 +51,10 @@ Route::put('/cleaners/{id}', [CleanerController::class, 'updateCleaner']);
 Route::delete('/cleaners/{id}', [CleanerController::class, 'deleteCleaner']);
 
 
+
+
+
+
        // Trip routes
    
 
@@ -213,3 +217,5 @@ Route::prefix('attempts')->group(function () {
 });
 
 Route::post('/tickets/{ticketId}/cancel-seats', [TicketController::class, 'cancelSeats']);
+
+Route::post('/trips/{tripId}/lock-seats', [TripController::class, 'lockSeats']);

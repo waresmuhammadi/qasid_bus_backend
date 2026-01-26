@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use App\Models\Trip;
+use App\Models\Ticket;
 use Morilog\Jalali\Jalalian;
 
 
@@ -689,8 +690,261 @@ public function update(Request $request, $id)
 }
 
 
+/**
+ * Lock specific seats for a trip with manual subdomain restriction
+ */
+/**
+ * Lock specific seats for a trip with manual subdomain restriction
+ */
+public function lockSeats(Request $request, $tripId)
+{
+    $request->validate([
+        'seat_numbers' => 'required|array',
+        'seat_numbers.*' => 'integer|min:1',
+        'bus_type' => 'required|in:VIP,580',
+        'departure_date' => 'required|date',
+        'is_locked_by' => 'required|string'
+    ]);
 
+    $trip = Trip::find($tripId);
+    if (!$trip) {
+        return response()->json(['message' => 'Trip not found'], 404);
+    }
 
+    // Get bus types as array
+    $tripBusTypes = is_array($trip->bus_type) ? $trip->bus_type : json_decode($trip->bus_type, true);
+    
+    if (!is_array($tripBusTypes) || !in_array($request->bus_type, $tripBusTypes)) {
+        return response()->json([
+            'message' => 'This bus type is not available for this trip',
+            'available_bus_types' => $tripBusTypes,
+            'requested_bus_type' => $request->bus_type
+        ], 400);
+    }
 
+    $departureDate = $request->departure_date;
+    $baseCapacity = ($request->bus_type === 'VIP') ? 35 : 49;
+    $additionalCapacity = is_array($trip->additional_capacity) 
+        ? $trip->additional_capacity 
+        : json_decode($trip->additional_capacity, true) ?? [];
+    
+    $additionalCapacityForBus = $additionalCapacity[$request->bus_type] ?? 0;
+    $totalCapacity = $baseCapacity + $additionalCapacityForBus;
 
+    // Validate seat numbers
+    $invalidSeats = [];
+    foreach ($request->seat_numbers as $seat) {
+        if ($seat < 1 || $seat > $totalCapacity) {
+            $invalidSeats[] = $seat;
+        }
+    }
+
+    if (!empty($invalidSeats)) {
+        return response()->json([
+            'message' => 'Some seat numbers are invalid',
+            'invalid_seats' => $invalidSeats,
+            'valid_range' => "Seats 1 to {$totalCapacity}"
+        ], 400);
+    }
+
+    // Check if seats are already booked
+    $bookedSeats = Ticket::where('trip_id', $tripId)
+        ->where('bus_type', $request->bus_type)
+        ->where('departure_date', $departureDate)
+        ->whereIn('payment_status', ['paid', 'in_processing'])
+        ->whereIn('seat_numbers', $request->seat_numbers)
+        ->pluck('seat_numbers')
+        ->flatten()
+        ->toArray();
+
+    if (!empty($bookedSeats)) {
+        return response()->json([
+            'message' => 'Some seats are already booked for this date',
+            'booked_seats' => $bookedSeats
+        ], 409);
+    }
+
+    // Get locked seats fields
+    $lockedSeatsField = "locked_seats_{$request->bus_type}";
+    $lockedByField = "locked_by_{$request->bus_type}";
+    
+    // FIX: Properly decode JSON (handle double encoding)
+    $lockedSeats = $this->safeJsonDecode($trip->$lockedSeatsField);
+    $lockedBy = $this->safeJsonDecode($trip->$lockedByField);
+    
+    // Get seats locked for this specific date
+    $dateLockedSeats = [];
+    $dateLockedBy = [];
+    
+    if (!empty($lockedSeats) && is_array($lockedSeats)) {
+        foreach ($lockedSeats as $seat => $lockInfo) {
+            if (is_array($lockInfo) && isset($lockInfo['dates'])) {
+                if (in_array($departureDate, $lockInfo['dates'])) {
+                    $dateLockedSeats[] = $seat;
+                    $dateLockedBy[$seat] = $lockedBy[$seat] ?? $request->is_locked_by;
+                }
+            } elseif (is_numeric($seat) && !empty($lockedBy[$seat])) {
+                $dateLockedSeats[] = $seat;
+                $dateLockedBy[$seat] = $lockedBy[$seat];
+            }
+        }
+    }
+
+    // Separate already locked seats and seats to lock
+    $alreadyLockedSeats = array_intersect($request->seat_numbers, $dateLockedSeats);
+    $seatsToLock = array_diff($request->seat_numbers, $alreadyLockedSeats);
+    
+    // For already locked seats, check if same user is unlocking
+    $seatsToUnlock = [];
+    $seatsLockedByOthers = [];
+    
+    foreach ($alreadyLockedSeats as $seat) {
+        $seatStr = (string)$seat;
+        $lockedByUser = $dateLockedBy[$seatStr] ?? null;
+        
+        if ($lockedByUser === $request->is_locked_by) {
+            // Same user - unlock it
+            $seatsToUnlock[] = $seat;
+        } else {
+            // Different user - cannot unlock
+            $seatsLockedByOthers[] = [
+                'seat' => $seat,
+                'locked_by' => $lockedByUser
+            ];
+        }
+    }
+
+    // Process unlocking seats
+    foreach ($seatsToUnlock as $seat) {
+        $seatStr = (string)$seat;
+        
+        if (isset($lockedSeats[$seatStr]) && is_array($lockedSeats[$seatStr]) && isset($lockedSeats[$seatStr]['dates'])) {
+            // Remove this date from locked dates
+            $key = array_search($departureDate, $lockedSeats[$seatStr]['dates']);
+            if ($key !== false) {
+                unset($lockedSeats[$seatStr]['dates'][$key]);
+                
+                // Re-index array
+                $lockedSeats[$seatStr]['dates'] = array_values($lockedSeats[$seatStr]['dates']);
+                
+                // If no dates left, remove the seat entry
+                if (empty($lockedSeats[$seatStr]['dates'])) {
+                    unset($lockedSeats[$seatStr]);
+                    unset($lockedBy[$seatStr]);
+                }
+            }
+        }
+    }
+
+    // Process locking seats
+    foreach ($seatsToLock as $seat) {
+        $seatStr = (string)$seat;
+        
+        if (isset($lockedSeats[$seatStr]) && is_array($lockedSeats[$seatStr]) && isset($lockedSeats[$seatStr]['dates'])) {
+            if (!in_array($departureDate, $lockedSeats[$seatStr]['dates'])) {
+                $lockedSeats[$seatStr]['dates'][] = $departureDate;
+            }
+        } else {
+            $lockedSeats[$seatStr] = [
+                'dates' => [$departureDate]
+            ];
+        }
+        
+        $lockedBy[$seatStr] = $request->is_locked_by;
+    }
+
+    // Save to database WITHOUT double encoding
+    $trip->$lockedSeatsField = $lockedSeats;
+    $trip->$lockedByField = $lockedBy;
+    $trip->save();
+
+    // Get seats locked for this specific date for response
+    $lockedSeatsForThisDate = [];
+    $lockedByForThisDate = [];
+    
+    foreach ($lockedSeats as $seat => $lockInfo) {
+        if (is_array($lockInfo) && isset($lockInfo['dates']) && in_array($departureDate, $lockInfo['dates'])) {
+            $lockedSeatsForThisDate[] = (int)$seat;
+            $lockedByForThisDate[$seat] = $lockedBy[$seat] ?? null;
+        }
+    }
+
+    // Prepare response
+    $allSeats = [];
+    for ($i = 1; $i <= $totalCapacity; $i++) {
+        $status = 'free';
+        $isLocked = false;
+        $isLockedBy = null;
+
+        if (in_array($i, $bookedSeats)) {
+            $status = 'booked';
+        } elseif (in_array($i, $lockedSeatsForThisDate)) {
+            $status = 'locked';
+            $isLocked = true;
+            $isLockedBy = $lockedByForThisDate[(string)$i] ?? null;
+        }
+
+        $allSeats[] = [
+            'seat_number' => $i,
+            'status' => $status,
+            'is_locked' => $isLocked,
+            'is_locked_by' => $isLockedBy
+        ];
+    }
+
+    // Determine message based on action
+    $message = '';
+    if (!empty($seatsToLock) && !empty($seatsToUnlock)) {
+        $message = 'Seats toggled successfully - locked: ' . count($seatsToLock) . ', unlocked: ' . count($seatsToUnlock);
+    } elseif (!empty($seatsToLock)) {
+        $message = 'Seats locked successfully for date ' . $departureDate;
+    } elseif (!empty($seatsToUnlock)) {
+        $message = 'Seats unlocked successfully for date ' . $departureDate;
+    } else {
+        $message = 'No action taken';
+    }
+
+    return response()->json([
+        'message' => $message,
+        'trip_id' => $tripId,
+        'bus_type' => $request->bus_type,
+        'departure_date' => $departureDate,
+        'action_summary' => [
+            'locked' => array_values($seatsToLock),
+            'unlocked' => array_values($seatsToUnlock),
+            'locked_by_others' => $seatsLockedByOthers
+        ],
+        'locked_seats_for_date' => $lockedSeatsForThisDate,
+        'locked_by_for_date' => $lockedByForThisDate,
+        'all_seats' => $allSeats,
+        'capacity_info' => [
+            'base_capacity' => $baseCapacity,
+            'additional_capacity' => $additionalCapacityForBus,
+            'total_capacity' => $totalCapacity
+        ]
+    ]);
+}
+
+// Add this helper method to TripController
+private function safeJsonDecode($data)
+{
+    if (is_array($data)) {
+        return $data;
+    }
+    
+    if (is_string($data)) {
+        // Try to decode
+        $decoded = json_decode($data, true);
+        
+        // If decoding fails, try removing backslashes
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            $data = stripslashes($data);
+            $decoded = json_decode($data, true);
+        }
+        
+        return $decoded ?? [];
+    }
+    
+    return [];
+}
 }
