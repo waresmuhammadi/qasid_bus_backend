@@ -218,4 +218,5 @@ Route::prefix('attempts')->group(function () {
 
 Route::post('/tickets/{ticketId}/cancel-seats', [TicketController::class, 'cancelSeats']);
 
-Route::post('/trips/{tripId}/lock-seats', [TripController::class, 'lockSeats']);
+Route::post('/trips/{tripId}/lock-seats', [TicketController::class, 'lockSeats']);
+Route::post('/trips/{tripId}/unlock-seats', [TicketController::class, 'unlockSeats']);

@@ -7,6 +7,7 @@ use App\Models\Trip;
 use App\Models\Ticket;
 use App\Models\Coupon;
 use App\Models\TempBooking;
+use App\Models\SeatLock;
 
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -21,21 +22,22 @@ class TicketController extends Controller
 public function availableSeats(Request $request, $tripId)
 {
     $request->validate([
-        'bus_type'       => 'required|in:VIP,580',
-        'departure_date' => 'required|date' // Make this required
+        'bus_type' => 'required|in:VIP,580',
+        'departure_date' => 'nullable|date' // ✅ Changed from required to nullable
     ]);
 
     $busType = $request->bus_type;
-    $departureDate = $request->departure_date;
+    $departureDate = $request->departure_date ? $this->normalizeDate($request->departure_date) : null;
     $trip = Trip::find($tripId);
 
     if (!$trip) {
         return response()->json(['message' => 'Trip not found'], 404);
     }
 
-    // Fix: Convert bus_type to array if it's stored as JSON string
-    $tripBusTypes = is_array($trip->bus_type) ? $trip->bus_type : json_decode($trip->bus_type, true) ?? [];
-    
+    $tripBusTypes = is_array($trip->bus_type)
+        ? $trip->bus_type
+        : json_decode($trip->bus_type, true) ?? [];
+
     if (!in_array($busType, $tripBusTypes)) {
         return response()->json([
             'message' => 'This bus type is not available for this trip',
@@ -44,133 +46,201 @@ public function availableSeats(Request $request, $tripId)
         ], 400);
     }
 
-    // Get booked seats FOR THIS SPECIFIC DATE
-    $bookedSeats = Ticket::where('trip_id', $tripId)
+    // ✅ Get booked seats - WITH OR WITHOUT DATE FILTER
+    if ($departureDate) {
+        // If date is provided, get seats for specific date
+        $bookedSeats = Ticket::where('trip_id', $tripId)
+            ->where('bus_type', $busType)
+            ->where('departure_date', $departureDate)
+            ->whereIn('payment_status', ['paid', 'in_processing'])
+            ->pluck('seat_numbers')
+            ->flatten()
+            ->unique()
+            ->toArray();
+    } else {
+        // If no date provided, get all booked seats for this bus type (all dates)
+        $bookedSeats = Ticket::where('trip_id', $tripId)
+            ->where('bus_type', $busType)
+            ->whereIn('payment_status', ['paid', 'in_processing'])
+            ->pluck('seat_numbers')
+            ->flatten()
+            ->unique()
+            ->toArray();
+    }
+
+    // ✅ Get locked seats - NO DATE FILTER! Locks are for ALL DAYS
+    $lockedSeats = SeatLock::where('trip_id', $tripId)
         ->where('bus_type', $busType)
-        ->where('departure_date', $departureDate)
-        ->where('status', '!=', 'cancelled')
-        ->where(function($query) {
-            $query->where('payment_status', 'paid')
-                  ->orWhere('payment_status', 'in_processing')
-                  ->orWhere('payment_status', 'unpaid');
-        })
-        ->pluck('seat_numbers')
-        ->flatten()
-        ->toArray();
+        ->get(['seat_number', 'locked_for']);
 
-    // ✅ USE ADDITIONAL CAPACITY
-    $seatRange = $this->getSeatRangeForBusType(
-        $tripBusTypes,
-        $busType, 
-        $trip->additional_capacity
-    );
+    // ✅ Capacity calculation
+    $baseCapacity = ($busType === 'VIP') ? 35 : 49;
 
-    if (!$seatRange) {
-        return response()->json(['message' => 'Invalid bus type configuration'], 400);
-    }
+    $additionalCapacity = is_array($trip->additional_capacity)
+        ? $trip->additional_capacity
+        : json_decode($trip->additional_capacity, true) ?? [];
 
-    $startSeat = $seatRange['start'];
-    $endSeat   = $seatRange['end'];
+    $additionalForBusType = $additionalCapacity[$busType] ?? 0;
+    $totalCapacity = $baseCapacity + $additionalForBusType;
 
-    // Get locked seats fields
-    $lockedSeatsField = "locked_seats_{$busType}";
-    $lockedByField = "locked_by_{$busType}";
-    
-    // Get existing locked seats
-$lockedSeats = $this->safeJsonDecode($trip->$lockedSeatsField);
-$lockedBy = $this->safeJsonDecode($trip->$lockedByField);
-    
-    // Get seats locked for this specific date
-    $lockedSeatsForDate = [];
-    $lockedByForDate = [];
-    
-    if (!empty($lockedSeats)) {
-        // Check if it's an indexed array (old format) or associative array (new format)
-        if (array_keys($lockedSeats) === range(0, count($lockedSeats) - 1)) {
-            // OLD FORMAT: [2, 3, 5, 6, 9, 11, 17, 18, 33, 34] - indexed array
-            // In old format, seats are locked for ALL dates
-            foreach ($lockedSeats as $seat) {
-                $lockedSeatsForDate[] = (int)$seat;
-                $lockedByForDate[$seat] = $lockedBy[$seat] ?? null;
-            }
-        } else {
-            // NEW FORMAT: {"23": {"dates": ["1404-11-8"]}} - associative array
-            foreach ($lockedSeats as $seat => $lockInfo) {
-                if (is_array($lockInfo) && isset($lockInfo['dates'])) {
-                    // SIMPLIFIED FIX: Compare dates without normalization
-                    // Just check if the date exists in any format
-                    $dates = $lockInfo['dates'];
-                    
-                    // Check if requested date matches any stored date (with or without leading zeros)
-                    $dateMatches = false;
-                    foreach ($dates as $storedDate) {
-                        // Try to normalize both dates for comparison
-                        $normalizedStoredDate = $this->normalizeDate($storedDate);
-                        $normalizedRequestedDate = $this->normalizeDate($departureDate);
-                        
-                        if ($normalizedStoredDate === $normalizedRequestedDate) {
-                            $dateMatches = true;
-                            break;
-                        }
-                        
-                        // Also check direct match (just in case)
-                        if ($storedDate === $departureDate) {
-                            $dateMatches = true;
-                            break;
-                        }
-                    }
-                    
-                    if ($dateMatches) {
-                        $lockedSeatsForDate[] = (int)$seat;
-                        $lockedByForDate[$seat] = $lockedBy[$seat] ?? null;
-                    }
-                } elseif (is_numeric($seat) && !empty($lockedBy[$seat])) {
-                    // Transitional format: seat number as key but no dates array
-                    // Assume locked for all dates for backward compatibility
-                    $lockedSeatsForDate[] = (int)$seat;
-                    $lockedByForDate[$seat] = $lockedBy[$seat];
-                }
-            }
-        }
-    }
-
+    // ✅ Build seat list
     $seats = [];
-    for ($i = $startSeat; $i <= $endSeat; $i++) {
+    for ($i = 1; $i <= $totalCapacity; $i++) {
         $status = 'free';
         $isLocked = false;
-        $isLockedBy = null;
+        $lockedFor = null;
 
         if (in_array($i, $bookedSeats)) {
             $status = 'booked';
-        } elseif (in_array($i, $lockedSeatsForDate)) {
-            $status = 'locked';
-            $isLocked = true;
-            $isLockedBy = $lockedByForDate[(string)$i] ?? null;
+        } else {
+            // Check if seat is locked (locks apply to ALL dates)
+            foreach ($lockedSeats as $lock) {
+                if ($lock->seat_number == $i) {
+                    $status = 'locked';
+                    $isLocked = true;
+                    $lockedFor = $lock->locked_for;
+                    break;
+                }
+            }
         }
 
         $seats[] = [
             'seat_number' => $i,
-            'status'      => $status,
-            'is_locked'   => $isLocked,
-            'is_locked_by'=> $isLockedBy
+            'status' => $status,
+            'is_locked' => $isLocked,
+            'locked_for' => $lockedFor
         ];
     }
 
     return response()->json([
-        'trip'              => $trip,
+        'trip' => $trip->only(['id', 'name', 'route', 'bus_type']),
         'selected_bus_type' => $busType,
-        'departure_date'    => $departureDate,
-        'seats'             => $seats,
-        'base_capacity'     => $seatRange['base_capacity'],
-        'additional_capacity' => $seatRange['additional_capacity'],
-        'total_capacity'    => $seatRange['total_capacity'],
-        'capacity_info'     => "Base: {$seatRange['base_capacity']} + Additional: {$seatRange['additional_capacity']} = Total: {$seatRange['total_capacity']}"
+        'departure_date' => $departureDate, // Will be null if not provided
+        'seats' => $seats,
+        'capacity_info' => [
+            'base_capacity' => $baseCapacity,
+            'additional_capacity' => $additionalForBusType,
+            'total_capacity' => $totalCapacity
+        ],
+        'summary' => [
+            'total_seats' => $totalCapacity,
+            'booked' => count($bookedSeats),
+            'locked' => $lockedSeats->count(),
+            'available' => $totalCapacity - count($bookedSeats) - $lockedSeats->count(),
+            'date_filter' => $departureDate ? 'specific_date' : 'all_dates'
+        ]
+    ]);
+}
+/**
+ * LOCK SEATS - NO DATE NEEDED! Locks are permanent for all days
+ */
+public function lockSeats(Request $request, $tripId)
+{
+    $request->validate([
+        'seat_numbers' => 'required|array',
+        'seat_numbers.*' => 'integer|min:1',
+        'bus_type' => 'required|in:VIP,580',
+        'locked_for' => 'required|string'
+        // NO departure_date needed! Locks are for ALL dates
+    ]);
+
+    $trip = Trip::findOrFail($tripId);
+
+    // Check for already locked seats (any date)
+    $alreadyLockedSeats = SeatLock::where('trip_id', $tripId)
+        ->where('bus_type', $request->bus_type)
+        ->whereIn('seat_number', $request->seat_numbers)
+        ->pluck('seat_number')
+        ->toArray();
+
+    if (!empty($alreadyLockedSeats)) {
+        return response()->json([
+            'message' => 'Some seats are already locked',
+            'already_locked_seats' => $alreadyLockedSeats
+        ], 409);
+    }
+
+    // Lock seats in database (NO departure_date field!)
+    $lockedSeats = [];
+    foreach ($request->seat_numbers as $seat) {
+        $lock = SeatLock::create([
+            'trip_id' => $tripId,
+            'bus_type' => $request->bus_type,
+            'departure_date' => null, // NULL = applies to ALL dates!
+            'seat_number' => $seat,
+            'locked_for' => $request->locked_for
+        ]);
+
+        $lockedSeats[] = $lock;
+    }
+
+    return response()->json([
+        'message' => 'Seats locked permanently for ALL dates!',
+        'locked_seats' => $lockedSeats,
+        'locked_by' => $request->locked_for
     ]);
 }
 
+/**
+ * UNLOCK SEATS - Just remove the lock (applies to all dates)
+ */
+public function unlockSeats(Request $request, $tripId)
+{
+    $request->validate([
+        'seat_numbers' => 'required|array',
+        'seat_numbers.*' => 'integer|min:1',
+        'bus_type' => 'required|in:VIP,580',
+        'locked_for' => 'required|string'
+        // NO departure_date needed!
+    ]);
+
+    $deletedCount = SeatLock::where('trip_id', $tripId)
+        ->where('bus_type', $request->bus_type)
+        ->where('locked_for', $request->locked_for)
+        ->whereIn('seat_number', $request->seat_numbers)
+        ->delete();
+
+    return response()->json([
+        'message' => 'Seats unlocked for ALL dates',
+        'unlocked_count' => $deletedCount
+    ]);
+}
+/**
+ * CLEAR ALL LOCKS FOR A SUBDOMAIN
+ */
+public function clearAllLocks(Request $request)
+{
+    $request->validate([
+        'locked_for' => 'required|string'
+    ]);
+
+    $lockKeys = cache()->get('seat_locks_keys', []);
+    $removedKeys = [];
+    $newLockKeys = [];
+
+    foreach ($lockKeys as $lockKey) {
+        $lockData = cache()->get($lockKey);
+        
+        if ($lockData && $lockData['locked_for'] === $request->locked_for) {
+            cache()->forget($lockKey);
+            $removedKeys[] = $lockKey;
+        } else {
+            $newLockKeys[] = $lockKey;
+        }
+    }
+
+    cache()->forever('seat_locks_keys', $newLockKeys);
+
+    return response()->json([
+        'message' => 'All locks cleared for subdomain',
+        'removed_locks_count' => count($removedKeys),
+        'subdomain' => $request->locked_for
+    ]);
+}
 // Add this helper method to TicketController:
 private function normalizeDate($date)
 {
+    // Handle both "1404-11-08" and "1404-11-8" formats
     $parts = explode('-', $date);
     if (count($parts) === 3) {
         $year = $parts[0];
@@ -179,7 +249,7 @@ private function normalizeDate($date)
         return "$year-$month-$day";
     }
     return $date;
-} // Helper method to get seat range for a specific bus type
+}// Helper method to get seat range for a specific bus type
 // In TicketController availableSeats method, update the seat range calculation:
 private function getSeatRangeForBusType($tripBusTypes, $selectedBusType, $additionalCapacity = [])
 {

@@ -33,7 +33,11 @@ class Trip extends Model
       'ratings' => 'array',
       'departure_dates_range' => 'array',
       'is_range' => 'boolean',
-      'additional_capacity' => 'array'
+      'additional_capacity' => 'array',
+         'locked_seats_vip'   => 'array',
+        'locked_by_vip'      => 'array',
+        'locked_seats_580'   => 'array',
+        'locked_by_580'      => 'array',
      
 
 
